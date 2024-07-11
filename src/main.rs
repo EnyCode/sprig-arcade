@@ -9,8 +9,8 @@ use defmt::*;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_net::Stack;
-use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{self, DMA_CH0, PIN_23, PIN_25, PIO0, USB};
+use embassy_rp::gpio::{Input, Level, Output};
+use embassy_rp::peripherals::{self, DMA_CH0, PIN_23, PIN_25, PIN_6, PIN_8, PIO0, USB};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi::{self, Spi};
 use embassy_rp::spi::{Blocking, Phase, Polarity};
@@ -34,6 +34,16 @@ use {defmt_rtt as _, panic_probe as _};
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
 });
+
+type Display = ST7735<
+    SpiDeviceWithConfig<
+        NoopRawMutex,
+        Spi<peripherals::SPI0, Blocking>,
+        Output<peripherals::PIN_20>,
+    >,
+    Output<peripherals::PIN_22>,
+    Output<peripherals::PIN_26>,
+>;
 
 // we import everything here to avoid repeats and for ease of use
 // makes it easier to eventually move to a fixed memory location if their all together (probably)
@@ -66,6 +76,20 @@ const ERRORS_SELECTED_ICON: &'static [u8; 212] =
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
     embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+}
+
+#[embassy_executor::task]
+// TODO: priotize easy updating or efficient updating
+// e.g. draw full button thing then draw selected stuff
+// or draw default stuff on the old one and selected stuff on the new one
+async fn update_ui(
+    disp: &'static mut Display,
+    left: Input<'static, PIN_6>,
+    right: Input<'static, PIN_8>,
+) {
+    loop {
+        Timer::after_secs(1).await;
+    }
 }
 
 pub enum NavButton {
