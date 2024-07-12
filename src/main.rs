@@ -6,18 +6,22 @@ use core::cell::RefCell;
 
 use cyw43_pio::PioSpi;
 use defmt::*;
-use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
+use embassy_embedded_hal::shared_bus::asynch::spi::{SpiDevice, SpiDeviceWithConfig};
 use embassy_executor::Spawner;
+use embassy_futures::select::select;
 use embassy_net::Stack;
-use embassy_rp::gpio::{Input, Level, Output};
+use embassy_rp::gpio::{AnyPin, Input, Level, Output};
 use embassy_rp::peripherals::{self, DMA_CH0, PIN_23, PIN_25, PIN_6, PIN_8, PIO0, USB};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_rp::spi::{self, Spi};
+use embassy_rp::spi::{self, Async, Spi};
 use embassy_rp::spi::{Blocking, Phase, Polarity};
 use embassy_rp::usb::{self, Driver};
 use embassy_rp::{bind_interrupts, config};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::{
+    CriticalSectionRawMutex, NoopRawMutex, ThreadModeRawMutex,
+};
+use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Timer};
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::geometry::{Point, Size};
@@ -37,13 +41,16 @@ bind_interrupts!(struct Irqs {
 
 type Display = ST7735<
     SpiDeviceWithConfig<
-        NoopRawMutex,
-        Spi<peripherals::SPI0, Blocking>,
-        Output<peripherals::PIN_20>,
+        'static,
+        ThreadModeRawMutex,
+        Spi<'static, peripherals::SPI0, Blocking>,
+        Output<'static, peripherals::PIN_20>,
     >,
-    Output<peripherals::PIN_22>,
-    Output<peripherals::PIN_26>,
+    Output<'static, peripherals::PIN_22>,
+    Output<'static, peripherals::PIN_26>,
 >;
+
+static DISPLAY: Mutex<CriticalSectionRawMutex, Option<Display>> = Mutex::new(None);
 
 // we import everything here to avoid repeats and for ease of use
 // makes it easier to eventually move to a fixed memory location if their all together (probably)
@@ -83,12 +90,19 @@ async fn logger_task(driver: Driver<'static, USB>) {
 // e.g. draw full button thing then draw selected stuff
 // or draw default stuff on the old one and selected stuff on the new one
 async fn update_ui(
-    disp: &'static mut Display,
-    left: Input<'static, PIN_6>,
-    right: Input<'static, PIN_8>,
+    //disp: &'static mut Display,
+    mut left: Input<'static, PIN_6>,
+    mut right: Input<'static, PIN_8>,
 ) {
+    info!("Starting update_ui task!");
+    Timer::after_nanos(20000).await;
     loop {
-        Timer::after_secs(1).await;
+        //select(left.wait_for_any_edge(), right.wait_for_any_edge()).await;
+        left.wait_for_any_edge().await;
+        // debouncing
+        Timer::after_millis(20).await;
+        info!("Button pressed! {:?}", left.is_high());
+        Timer::after_nanos(20000).await;
     }
 }
 
@@ -171,7 +185,7 @@ async fn main(spawner: Spawner) {
         Timer::after_secs(1).await;
     }
     info!("Launched Arcade Sprig!");
-    // TODO: remove logging, dont know why its needed but it works
+    // TODO: remove logging wait thing, dont know why its needed but it works
     Timer::after_nanos(20000).await;
 
     let clk = p.PIN_18;
@@ -189,7 +203,7 @@ async fn main(spawner: Spawner) {
 
     let spi: Spi<'_, _, Blocking> =
         Spi::new_blocking(p.SPI0, clk, mosi, miso, display_config.clone());
-    let spi_bus: Mutex<NoopRawMutex, _> = Mutex::new(RefCell::new(spi));
+    let spi_bus: BlockingMutex<NoopRawMutex, _> = BlockingMutex::new(RefCell::new(spi));
 
     let display_spi = SpiDeviceWithConfig::new(
         &spi_bus,
@@ -209,6 +223,14 @@ async fn main(spawner: Spawner) {
     disp.clear(Rgb565::new(31, 59, 26)).unwrap();
 
     // BOILERPLATE MARK
+
+    spawner
+        .spawn(update_ui(
+            //&mut disp,
+            Input::new(p.PIN_6, embassy_rp::gpio::Pull::Up),
+            Input::new(p.PIN_8, embassy_rp::gpio::Pull::Up),
+        ))
+        .unwrap();
 
     let logo: Tga<Rgb565> = Tga::from_slice(ARCADE_LOGO).unwrap();
     let buttons: Tga<Rgb565> = Tga::from_slice(BUTTONS).unwrap();
@@ -235,8 +257,13 @@ async fn main(spawner: Spawner) {
         .unwrap();
 
     info!("Done!");
-    // TODO: remove logging, dont know why its needed but it works
     Timer::after_nanos(20000).await;
 
-    loop {}
+    {
+        *(DISPLAY.lock().await) = Some(disp);
+    }
+
+    loop {
+        Timer::after_secs(1).await;
+    }
 }
