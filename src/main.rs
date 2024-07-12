@@ -2,18 +2,19 @@
 #![no_main]
 #![allow(async_fn_in_trait)]
 
+use core::any::Any;
 use core::cell::RefCell;
 
 use cyw43_pio::PioSpi;
 use defmt::*;
-use embassy_embedded_hal::shared_bus::asynch::spi::{SpiDevice, SpiDeviceWithConfig};
+use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_net::Stack;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output};
 use embassy_rp::peripherals::{self, DMA_CH0, PIN_23, PIN_25, PIN_6, PIN_8, PIO0, USB};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_rp::spi::{self, Async, Spi};
+use embassy_rp::spi::{self, Spi};
 use embassy_rp::spi::{Blocking, Phase, Polarity};
 use embassy_rp::usb::{self, Driver};
 use embassy_rp::{bind_interrupts, config};
@@ -21,6 +22,7 @@ use embassy_sync::blocking_mutex::raw::{
     CriticalSectionRawMutex, NoopRawMutex, ThreadModeRawMutex,
 };
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
+use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Delay, Timer};
 use embedded_graphics::draw_target::DrawTarget;
@@ -39,69 +41,91 @@ bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
 });
 
-type Display = ST7735<
-    SpiDeviceWithConfig<
-        'static,
-        ThreadModeRawMutex,
-        Spi<'static, peripherals::SPI0, Blocking>,
-        Output<'static, peripherals::PIN_20>,
-    >,
-    Output<'static, peripherals::PIN_22>,
-    Output<'static, peripherals::PIN_26>,
->;
-
-static DISPLAY: Mutex<CriticalSectionRawMutex, Option<Display>> = Mutex::new(None);
-
 // we import everything here to avoid repeats and for ease of use
 // makes it easier to eventually move to a fixed memory location if their all together (probably)
-const ARCADE_LOGO: &'static [u8; 2347] = include_bytes!("assets/arcade.tga");
-const BUTTONS: &'static [u8; 1942] = include_bytes!("assets/buttons.tga");
-const BTN: &'static [u8; 204] = include_bytes!("assets/btn.tga");
-const SELECTED_BTN: &'static [u8; 204] = include_bytes!("assets/selected_btn.tga");
+const ARCADE_LOGO: &'static [u8; 2347] = include_bytes!("../assets/arcade.tga");
+const BUTTONS: &'static [u8; 1942] = include_bytes!("../assets/buttons.tga");
+const BTN: &'static [u8; 204] = include_bytes!("../assets/btn.tga");
+const SELECTED_BTN: &'static [u8; 204] = include_bytes!("../assets/selected_btn.tga");
 
-const HOME_ICON: &'static [u8; 190] = include_bytes!("assets/buttons/home.tga");
-const SESSION_ICON: &'static [u8; 232] = include_bytes!("assets/buttons/session.tga");
-const LEADERBOARD_ICON: &'static [u8; 160] = include_bytes!("assets/buttons/leaderboard.tga");
-const PROJECTS_ICON: &'static [u8; 182] = include_bytes!("assets/buttons/projects.tga");
-const WISHLIST_ICON: &'static [u8; 218] = include_bytes!("assets/buttons/wishlist.tga");
-const SHOP_ICON: &'static [u8; 204] = include_bytes!("assets/buttons/shop.tga");
-const ERRORS_ICON: &'static [u8; 212] = include_bytes!("assets/buttons/errors.tga");
+const HOME_ICON: &'static [u8; 190] = include_bytes!("../assets/buttons/home.tga");
+const SESSION_ICON: &'static [u8; 232] = include_bytes!("../assets/buttons/session.tga");
+const LEADERBOARD_ICON: &'static [u8; 160] = include_bytes!("../assets/buttons/leaderboard.tga");
+const PROJECTS_ICON: &'static [u8; 182] = include_bytes!("../assets/buttons/projects.tga");
+const WISHLIST_ICON: &'static [u8; 218] = include_bytes!("../assets/buttons/wishlist.tga");
+const SHOP_ICON: &'static [u8; 204] = include_bytes!("../assets/buttons/shop.tga");
+const ERRORS_ICON: &'static [u8; 212] = include_bytes!("../assets/buttons/errors.tga");
 
-const HOME_SELECTED_ICON: &'static [u8; 190] = include_bytes!("assets/buttons/home_selected.tga");
+const HOME_SELECTED_ICON: &'static [u8; 190] =
+    include_bytes!("../assets/buttons/home_selected.tga");
 const SESSION_SELECTED_ICON: &'static [u8; 232] =
-    include_bytes!("assets/buttons/session_selected.tga");
+    include_bytes!("../assets/buttons/session_selected.tga");
 const LEADERBOARD_SELECTED_ICON: &'static [u8; 160] =
-    include_bytes!("assets/buttons/leaderboard_selected.tga");
+    include_bytes!("../assets/buttons/leaderboard_selected.tga");
 const PROJECTS_SELECTED_ICON: &'static [u8; 182] =
-    include_bytes!("assets/buttons/projects_selected.tga");
+    include_bytes!("../assets/buttons/projects_selected.tga");
 const WISHLIST_SELECTED_ICON: &'static [u8; 218] =
-    include_bytes!("assets/buttons/wishlist_selected.tga");
-const SHOP_SELECTED_ICON: &'static [u8; 204] = include_bytes!("assets/buttons/shop_selected.tga");
+    include_bytes!("../assets/buttons/wishlist_selected.tga");
+const SHOP_SELECTED_ICON: &'static [u8; 204] =
+    include_bytes!("../assets/buttons/shop_selected.tga");
 const ERRORS_SELECTED_ICON: &'static [u8; 212] =
-    include_bytes!("assets/buttons/errors_selected.tga");
+    include_bytes!("../assets/buttons/errors_selected.tga");
+
+// TODO: double check length
+static EVENTS: Channel<ThreadModeRawMutex, Events, 8> = Channel::new();
 
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
     embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 }
 
+#[derive(Debug, PartialEq)]
+pub enum Button {
+    Left,
+    Right,
+}
+
+pub enum Events {
+    ButtonPressed(Button),
+    ButtonReleased(Button),
+}
+
 #[embassy_executor::task]
 // TODO: priotize easy updating or efficient updating
 // e.g. draw full button thing then draw selected stuff
 // or draw default stuff on the old one and selected stuff on the new one
-async fn update_ui(
-    //disp: &'static mut Display,
-    mut left: Input<'static, PIN_6>,
-    mut right: Input<'static, PIN_8>,
-) {
+async fn input_task(mut left: Input<'static, PIN_6>, mut right: Input<'static, PIN_8>) {
     info!("Starting update_ui task!");
     Timer::after_nanos(20000).await;
     loop {
-        //select(left.wait_for_any_edge(), right.wait_for_any_edge()).await;
-        left.wait_for_any_edge().await;
+        let (l, r) = (left.is_high(), right.is_high());
+        select(left.wait_for_any_edge(), right.wait_for_any_edge()).await;
+        //left.wait_for_any_edge().await;
         // debouncing
         Timer::after_millis(20).await;
-        info!("Button pressed! {:?}", left.is_high());
+        // changed button
+        let changed_button = if l != left.is_high() {
+            Button::Left
+        } else {
+            Button::Right
+        };
+        let event = if (left.is_high() && changed_button == Button::Left)
+            || (right.is_high() && changed_button == Button::Right)
+        {
+            Events::ButtonReleased(changed_button)
+        } else {
+            Events::ButtonPressed(changed_button)
+        };
+
+        EVENTS.send(event).await;
+        info!(
+            "Button pressed! {:?}",
+            if l != left.is_high() {
+                Button::Left
+            } else {
+                Button::Right
+            }
+        );
         Timer::after_nanos(20000).await;
     }
 }
@@ -203,7 +227,7 @@ async fn main(spawner: Spawner) {
 
     let spi: Spi<'_, _, Blocking> =
         Spi::new_blocking(p.SPI0, clk, mosi, miso, display_config.clone());
-    let spi_bus: BlockingMutex<NoopRawMutex, _> = BlockingMutex::new(RefCell::new(spi));
+    let spi_bus: BlockingMutex<CriticalSectionRawMutex, _> = BlockingMutex::new(RefCell::new(spi));
 
     let display_spi = SpiDeviceWithConfig::new(
         &spi_bus,
@@ -225,8 +249,7 @@ async fn main(spawner: Spawner) {
     // BOILERPLATE MARK
 
     spawner
-        .spawn(update_ui(
-            //&mut disp,
+        .spawn(input_task(
             Input::new(p.PIN_6, embassy_rp::gpio::Pull::Up),
             Input::new(p.PIN_8, embassy_rp::gpio::Pull::Up),
         ))
@@ -259,11 +282,17 @@ async fn main(spawner: Spawner) {
     info!("Done!");
     Timer::after_nanos(20000).await;
 
-    {
-        *(DISPLAY.lock().await) = Some(disp);
-    }
-
     loop {
-        Timer::after_secs(1).await;
+        match EVENTS.receive().await {
+            Events::ButtonPressed(button) => {
+                info!("pressed button {:?}", button);
+                //Timer::after_nanos(20000).await;
+            }
+            Events::ButtonReleased(button) => {
+                info!("released {:?}", button);
+                info!("------------------");
+                //Timer::after_nanos(20000).await;
+            }
+        }
     }
 }
