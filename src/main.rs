@@ -9,10 +9,12 @@ use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
-use embassy_futures::select::select;
+use embassy_futures::select::{select, select3, select4};
 use embassy_net::Stack;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output};
-use embassy_rp::peripherals::{self, DMA_CH0, PIN_23, PIN_25, PIN_6, PIN_8, PIO0, USB};
+use embassy_rp::peripherals::{
+    self, DMA_CH0, PIN_14, PIN_15, PIN_23, PIN_25, PIN_6, PIN_8, PIO0, USB,
+};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi::{self, Spi};
 use embassy_rp::spi::{Blocking, Phase, Polarity};
@@ -31,7 +33,7 @@ use embedded_graphics::image::Image;
 use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
 use embedded_graphics::primitives::{Primitive, PrimitiveStyle, Rectangle};
 use embedded_graphics::Drawable;
-use gui::nav::update_selected;
+use gui::nav::{update_active, update_selected};
 use heapless::Vec;
 use log::info;
 use st7735_lcd::{Orientation, ST7735};
@@ -40,6 +42,7 @@ use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
+    PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
 
 mod gui;
@@ -50,6 +53,7 @@ const ARCADE_LOGO: &'static [u8; 2347] = include_bytes!("../assets/arcade.tga");
 const BUTTONS: &'static [u8; 1942] = include_bytes!("../assets/buttons.tga");
 const BTN: &'static [u8; 204] = include_bytes!("../assets/btn.tga");
 const SELECTED_BTN: &'static [u8; 204] = include_bytes!("../assets/selected_btn.tga");
+const ACTIVE_BTN: &'static [u8; 204] = include_bytes!("../assets/active_btn.tga");
 
 const HOME_ICON: &'static [u8; 190] = include_bytes!("../assets/buttons/home.tga");
 const SESSION_ICON: &'static [u8; 232] = include_bytes!("../assets/buttons/session.tga");
@@ -78,10 +82,14 @@ async fn logger_task(driver: Driver<'static, USB>) {
     embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Button {
+    Up,
+    Down,
     Left,
     Right,
+    A,
+    B,
 }
 
 pub enum Events {
@@ -93,39 +101,71 @@ pub enum Events {
 // TODO: priotize easy updating or efficient updating
 // e.g. draw full button thing then draw selected stuff
 // or draw default stuff on the old one and selected stuff on the new one
-async fn input_task(mut left: Input<'static, PIN_6>, mut right: Input<'static, PIN_8>) {
-    info!("Starting update_ui task!");
+async fn input_task(
+    mut up: Input<'static, AnyPin>,
+    mut down: Input<'static, AnyPin>,
+    mut left: Input<'static, AnyPin>,
+    mut right: Input<'static, AnyPin>,
+    mut a: Input<'static, AnyPin>,
+    mut b: Input<'static, AnyPin>,
+) {
+    debug!("Starting input event task.");
     Timer::after_nanos(20000).await;
     loop {
-        let (l, r) = (left.is_high(), right.is_high());
-        select(left.wait_for_any_edge(), right.wait_for_any_edge()).await;
-        //left.wait_for_any_edge().await;
+        let previous = [
+            a.is_high(),
+            b.is_high(),
+            up.is_high(),
+            down.is_high(),
+            left.is_high(),
+            right.is_high(),
+        ];
+
+        let result = select3(
+            a.wait_for_any_edge(),
+            b.wait_for_any_edge(),
+            select4(
+                up.wait_for_any_edge(),
+                down.wait_for_any_edge(),
+                left.wait_for_any_edge(),
+                right.wait_for_any_edge(),
+            ),
+        )
+        .await;
+
         // debouncing
         Timer::after_millis(20).await;
-        // changed button
-        let changed_button = if l != left.is_high() {
-            Button::Left
-        } else {
-            Button::Right
-        };
-        let event = if (left.is_high() && changed_button == Button::Left)
-            || (right.is_high() && changed_button == Button::Right)
-        {
-            Events::ButtonReleased(changed_button)
-        } else {
-            Events::ButtonPressed(changed_button)
+
+        let change = match result {
+            embassy_futures::select::Either3::First(_) => Button::A,
+            embassy_futures::select::Either3::Second(_) => Button::B,
+            embassy_futures::select::Either3::Third(result) => match result {
+                embassy_futures::select::Either4::First(_) => Button::Up,
+                embassy_futures::select::Either4::Second(_) => Button::Down,
+                embassy_futures::select::Either4::Third(_) => Button::Left,
+                embassy_futures::select::Either4::Fourth(_) => Button::Right,
+            },
         };
 
+        let button = match change {
+            Button::A => a.is_high(),
+            Button::B => b.is_high(),
+            Button::Up => up.is_high(),
+            Button::Down => down.is_high(),
+            Button::Left => left.is_high(),
+            Button::Right => right.is_high(),
+        };
+
+        let event = match button {
+            true => Events::ButtonReleased(change),
+            false => Events::ButtonPressed(change),
+        };
+
+        // changed button
+
         EVENTS.send(event).await;
-        info!(
-            "Button pressed! {:?}",
-            if l != left.is_high() {
-                Button::Left
-            } else {
-                Button::Right
-            }
-        );
-        Timer::after_nanos(20000).await;
+        //info!("Button pressed! {:?}", change);
+        //Timer::after_nanos(20000).await;
     }
 }
 
@@ -262,8 +302,12 @@ async fn main(spawner: Spawner) {
 
     spawner
         .spawn(input_task(
-            Input::new(p.PIN_6, embassy_rp::gpio::Pull::Up),
-            Input::new(p.PIN_8, embassy_rp::gpio::Pull::Up),
+            Input::new(AnyPin::from(p.PIN_5), embassy_rp::gpio::Pull::Up),
+            Input::new(AnyPin::from(p.PIN_7), embassy_rp::gpio::Pull::Up),
+            Input::new(AnyPin::from(p.PIN_6), embassy_rp::gpio::Pull::Up),
+            Input::new(AnyPin::from(p.PIN_8), embassy_rp::gpio::Pull::Up),
+            Input::new(AnyPin::from(p.PIN_14), embassy_rp::gpio::Pull::Up),
+            Input::new(AnyPin::from(p.PIN_15), embassy_rp::gpio::Pull::Up),
         ))
         .unwrap();
 
@@ -280,7 +324,7 @@ async fn main(spawner: Spawner) {
         .draw(&mut disp)
         .unwrap();
 
-    let active = NavButton::Home;
+    let mut active = NavButton::Home;
     let mut selected = NavButton::Session;
 
     Image::new(&selected_btn, selected.pos())
@@ -296,19 +340,41 @@ async fn main(spawner: Spawner) {
 
     loop {
         match EVENTS.receive().await {
-            Events::ButtonPressed(button) => {
-                let prev_selected = selected.clone();
-                selected = match button {
-                    Button::Left => selected.left(),
-                    Button::Right => selected.right(),
-                };
-                update_selected(selected, prev_selected, &mut disp);
-                info!("pressed button {:?}", button);
-            }
+            Events::ButtonPressed(button) => match button {
+                Button::Left | Button::Right => {
+                    selected = move_nav(&selected, &active, &button, &mut disp).await;
+                }
+                Button::A => active = select_btn(&selected, &active, &mut disp).await,
+                _ => {}
+            },
             Events::ButtonReleased(button) => {
                 info!("released {:?}", button);
                 info!("------------------");
             }
         }
     }
+}
+
+async fn move_nav(
+    selected: &NavButton,
+    active: &NavButton,
+    button: &Button,
+    disp: &mut Display<'_>,
+) -> NavButton {
+    info!("moving nav!");
+    let prev_selected = selected.clone();
+    let next = match button {
+        Button::Left => selected.left(),
+        Button::Right => selected.right(),
+        _ => return selected.clone(),
+    };
+    update_selected(&next, &prev_selected, active, disp);
+
+    next
+}
+
+async fn select_btn(selected: &NavButton, active: &NavButton, disp: &mut Display<'_>) -> NavButton {
+    update_active(selected, active, disp);
+
+    selected.clone()
 }
