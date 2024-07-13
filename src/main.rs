@@ -11,6 +11,7 @@ use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, select3, select4};
 use embassy_net::Stack;
+use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output};
 use embassy_rp::peripherals::{
     self, DMA_CH0, PIN_14, PIN_15, PIN_23, PIN_25, PIN_6, PIN_8, PIO0, USB,
@@ -19,7 +20,6 @@ use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi::{self, Spi};
 use embassy_rp::spi::{Blocking, Phase, Polarity};
 use embassy_rp::usb::{self, Driver};
-use embassy_rp::{bind_interrupts, config};
 use embassy_sync::blocking_mutex::raw::{
     CriticalSectionRawMutex, NoopRawMutex, ThreadModeRawMutex,
 };
@@ -45,7 +45,9 @@ bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
 
+mod config;
 mod gui;
+mod wifi;
 
 // we import everything here to avoid repeats and for ease of use
 // makes it easier to eventually move to a fixed memory location if their all together (probably)
@@ -299,6 +301,14 @@ async fn main(spawner: Spawner) {
     disp.clear(Rgb565::new(31, 60, 27)).unwrap();
 
     // BOILERPLATE MARK
+
+    wifi::setup(
+        &spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0,
+    )
+    .await;
+
+    info!("Done w/ wifi");
+    Timer::after_secs(1).await;
 
     spawner
         .spawn(input_task(
