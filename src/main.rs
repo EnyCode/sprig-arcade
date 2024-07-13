@@ -31,6 +31,7 @@ use embedded_graphics::image::Image;
 use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
 use embedded_graphics::primitives::{Primitive, PrimitiveStyle, Rectangle};
 use embedded_graphics::Drawable;
+use gui::nav::update_selected;
 use heapless::Vec;
 use log::info;
 use st7735_lcd::{Orientation, ST7735};
@@ -40,6 +41,8 @@ use {defmt_rtt as _, panic_probe as _};
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
 });
+
+mod gui;
 
 // we import everything here to avoid repeats and for ease of use
 // makes it easier to eventually move to a fixed memory location if their all together (probably)
@@ -56,20 +59,16 @@ const WISHLIST_ICON: &'static [u8; 218] = include_bytes!("../assets/buttons/wish
 const SHOP_ICON: &'static [u8; 204] = include_bytes!("../assets/buttons/shop.tga");
 const ERRORS_ICON: &'static [u8; 212] = include_bytes!("../assets/buttons/errors.tga");
 
-const HOME_SELECTED_ICON: &'static [u8; 190] =
-    include_bytes!("../assets/buttons/home_selected.tga");
-const SESSION_SELECTED_ICON: &'static [u8; 232] =
-    include_bytes!("../assets/buttons/session_selected.tga");
-const LEADERBOARD_SELECTED_ICON: &'static [u8; 160] =
-    include_bytes!("../assets/buttons/leaderboard_selected.tga");
-const PROJECTS_SELECTED_ICON: &'static [u8; 182] =
-    include_bytes!("../assets/buttons/projects_selected.tga");
-const WISHLIST_SELECTED_ICON: &'static [u8; 218] =
-    include_bytes!("../assets/buttons/wishlist_selected.tga");
-const SHOP_SELECTED_ICON: &'static [u8; 204] =
-    include_bytes!("../assets/buttons/shop_selected.tga");
-const ERRORS_SELECTED_ICON: &'static [u8; 212] =
-    include_bytes!("../assets/buttons/errors_selected.tga");
+type Display<'a> = ST7735<
+    SpiDeviceWithConfig<
+        'a,
+        CriticalSectionRawMutex,
+        Spi<'a, peripherals::SPI0, Blocking>,
+        Output<'a, peripherals::PIN_20>,
+    >,
+    Output<'a, peripherals::PIN_22>,
+    Output<'a, peripherals::PIN_26>,
+>;
 
 // TODO: double check length
 static EVENTS: Channel<ThreadModeRawMutex, Events, 8> = Channel::new();
@@ -130,6 +129,7 @@ async fn input_task(mut left: Input<'static, PIN_6>, mut right: Input<'static, P
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NavButton {
     None,
     Home,
@@ -170,30 +170,42 @@ impl NavButton {
         .unwrap()
     }
 
-    pub fn selected_icon(&self) -> Tga<Rgb565> {
-        Tga::from_slice(match self {
-            NavButton::Home => HOME_SELECTED_ICON,
-            NavButton::Session => SESSION_SELECTED_ICON,
-            NavButton::Leaderboard => LEADERBOARD_SELECTED_ICON,
-            NavButton::Projects => PROJECTS_SELECTED_ICON,
-            NavButton::Wishlist => WISHLIST_SELECTED_ICON,
-            NavButton::Shop => SHOP_SELECTED_ICON,
-            NavButton::Errors => ERRORS_SELECTED_ICON,
-            NavButton::None => HOME_SELECTED_ICON,
-        })
-        .unwrap()
-    }
-
     pub fn icon_pos(&self) -> Point {
         match self {
             NavButton::Home => Point::new(28, 2),
             NavButton::Session => Point::new(43, 1),
-            NavButton::Leaderboard => Point::new(55, 0),
-            NavButton::Projects => Point::new(71, 0),
-            NavButton::Wishlist => Point::new(87, 0),
-            NavButton::Shop => Point::new(103, 0),
-            NavButton::Errors => Point::new(119, 0),
+            NavButton::Leaderboard => Point::new(60, 3),
+            NavButton::Projects => Point::new(76, 1),
+            NavButton::Wishlist => Point::new(91, 2),
+            NavButton::Shop => Point::new(107, 0),
+            NavButton::Errors => Point::new(124, 1),
             NavButton::None => Point::new(0, 0),
+        }
+    }
+
+    pub fn right(&self) -> Self {
+        match self {
+            NavButton::Home => NavButton::Session,
+            NavButton::Session => NavButton::Leaderboard,
+            NavButton::Leaderboard => NavButton::Projects,
+            NavButton::Projects => NavButton::Wishlist,
+            NavButton::Wishlist => NavButton::Shop,
+            NavButton::Shop => NavButton::Errors,
+            NavButton::Errors => NavButton::Home,
+            NavButton::None => NavButton::Home,
+        }
+    }
+
+    pub fn left(&self) -> Self {
+        match self {
+            NavButton::Home => NavButton::Errors,
+            NavButton::Session => NavButton::Home,
+            NavButton::Leaderboard => NavButton::Session,
+            NavButton::Projects => NavButton::Leaderboard,
+            NavButton::Wishlist => NavButton::Projects,
+            NavButton::Shop => NavButton::Wishlist,
+            NavButton::Errors => NavButton::Shop,
+            NavButton::None => NavButton::Home,
         }
     }
 }
@@ -240,11 +252,11 @@ async fn main(spawner: Spawner) {
 
     let _bl = Output::new(bl, Level::High);
 
-    let mut disp = ST7735::new(display_spi, dcx, rst, true, false, 160, 128);
+    let mut disp: Display = ST7735::new(display_spi, dcx, rst, true, false, 160, 128);
 
     disp.init(&mut Delay).unwrap();
     disp.set_orientation(&Orientation::Landscape).unwrap();
-    disp.clear(Rgb565::new(31, 59, 26)).unwrap();
+    disp.clear(Rgb565::new(31, 60, 27)).unwrap();
 
     // BOILERPLATE MARK
 
@@ -269,13 +281,13 @@ async fn main(spawner: Spawner) {
         .unwrap();
 
     let active = NavButton::Home;
-    let selected = NavButton::Session;
+    let mut selected = NavButton::Session;
 
     Image::new(&selected_btn, selected.pos())
         .draw(&mut disp)
         .unwrap();
 
-    Image::new(&selected.selected_icon(), selected.icon_pos())
+    Image::new(&selected.icon(), selected.icon_pos())
         .draw(&mut disp)
         .unwrap();
 
@@ -285,13 +297,17 @@ async fn main(spawner: Spawner) {
     loop {
         match EVENTS.receive().await {
             Events::ButtonPressed(button) => {
+                let prev_selected = selected.clone();
+                selected = match button {
+                    Button::Left => selected.left(),
+                    Button::Right => selected.right(),
+                };
+                update_selected(selected, prev_selected, &mut disp);
                 info!("pressed button {:?}", button);
-                //Timer::after_nanos(20000).await;
             }
             Events::ButtonReleased(button) => {
                 info!("released {:?}", button);
                 info!("------------------");
-                //Timer::after_nanos(20000).await;
             }
         }
     }
