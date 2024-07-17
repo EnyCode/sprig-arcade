@@ -256,7 +256,7 @@ impl NavButton {
 }
 
 #[embassy_executor::main]
-async fn main(spawner: Spawner) {
+async fn main(spawner: Spawner) -> ! {
     let p = embassy_rp::init(Default::default());
     let driver = Driver::new(p.USB, Irqs);
     spawner.spawn(logger_task(driver)).unwrap();
@@ -305,6 +305,14 @@ async fn main(spawner: Spawner) {
 
     // BOILERPLATE MARK
 
+    let wifi = wifi::setup(
+        &spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0, &mut disp,
+    )
+    .await;
+
+    info!("Done with wifi.");
+    Timer::after_secs(1).await;
+
     spawner
         .spawn(input_task(
             Input::new(AnyPin::from(p.PIN_5), embassy_rp::gpio::Pull::Up),
@@ -340,16 +348,8 @@ async fn main(spawner: Spawner) {
         .draw(&mut disp)
         .unwrap();
 
-    info!("Done! Configuring Wifi.");
+    info!("Done!");
     Timer::after_nanos(20000).await;
-
-    let wifi = wifi::setup(
-        &spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0,
-    )
-    .await;
-
-    info!("Done with wifi");
-    Timer::after_secs(1).await;
 
     let mut tick_counter = 1000 * 60 * 5;
 
@@ -377,7 +377,13 @@ async fn main(spawner: Spawner) {
             tick_counter = 0;
             let r = wifi::get_hours(wifi).await;
             if r.is_err() {
-                info!("error getting hours");
+                let err = r.unwrap_err();
+                match err {
+                    reqwless::Error::AlreadySent => (),
+                    _ => error!("Failed retrieving hours with error {:?}", err),
+                };
+            } else {
+                info!("You have {:?} hours.", r.unwrap());
             }
         }
     }

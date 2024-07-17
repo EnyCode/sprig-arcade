@@ -16,6 +16,17 @@ use embassy_rp::{
     Peripherals,
 };
 use embassy_time::Timer;
+use embedded_graphics::draw_target::DrawTarget;
+use embedded_graphics::{
+    geometry::{Point, Size},
+    primitives::Primitive,
+    text::Text,
+};
+use embedded_graphics::{
+    pixelcolor::Rgb565,
+    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
+    Drawable,
+};
 use heapless::String;
 use log::{error, info};
 use rand::RngCore;
@@ -27,12 +38,16 @@ use reqwless::{
 use serde::Deserialize;
 use static_cell::StaticCell;
 
-use crate::Irqs;
+use crate::{
+    gui::{BLACK_CHAR, CENTERED_TEXT},
+    Irqs,
+};
 
 #[derive(Deserialize, Debug)]
 pub struct StatsResponse {
     ok: bool,
     data: Option<StatsData>,
+    error: Option<&'static str>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -65,7 +80,36 @@ pub async fn setup(
     dio: PIN_24,
     clk: PIN_29,
     dma_ch: DMA_CH0,
+    display: &mut crate::Display<'_>,
 ) -> &'static Stack<cyw43::NetDriver<'static>> {
+    Text::with_text_style("Loading...", Point::new(80, 40), BLACK_CHAR, CENTERED_TEXT)
+        .draw(display)
+        .unwrap();
+
+    let background = PrimitiveStyleBuilder::new()
+        .fill_color(Rgb565::new(30, 57, 24))
+        .build();
+
+    let fill = PrimitiveStyleBuilder::new()
+        .fill_color(Rgb565::new(1, 44, 23))
+        .build();
+
+    RoundedRectangle::with_equal_corners(
+        Rectangle::new(Point::new(20, 49), Size::new(120, 6)),
+        Size::new(2, 2),
+    )
+    .into_styled(background)
+    .draw(display)
+    .unwrap();
+
+    RoundedRectangle::with_equal_corners(
+        Rectangle::new(Point::new(20, 49), Size::new(5, 6)),
+        Size::new(2, 2),
+    )
+    .into_styled(fill)
+    .draw(display)
+    .unwrap();
+
     let mut rng = RoscRng;
 
     let fw = include_bytes!("../firmware/43439A0.bin");
@@ -87,6 +131,14 @@ pub async fn setup(
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
 
+    RoundedRectangle::with_equal_corners(
+        Rectangle::new(Point::new(20, 49), Size::new(20, 6)),
+        Size::new(2, 2),
+    )
+    .into_styled(fill)
+    .draw(display)
+    .unwrap();
+
     let config = Config::dhcpv4(Default::default());
 
     let seed = rng.next_u64();
@@ -102,6 +154,16 @@ pub async fn setup(
 
     spawner.spawn(net_task(stack)).unwrap();
 
+    RoundedRectangle::with_equal_corners(
+        Rectangle::new(Point::new(20, 49), Size::new(30, 6)),
+        Size::new(2, 2),
+    )
+    .into_styled(fill)
+    .draw(display)
+    .unwrap();
+
+    info!("joining wifi");
+
     loop {
         //match control.join_open(WIFI_NETWORK).await { // for open networks
         match control
@@ -116,22 +178,61 @@ pub async fn setup(
         }
     }
 
+    RoundedRectangle::with_equal_corners(
+        Rectangle::new(Point::new(20, 49), Size::new(50, 6)),
+        Size::new(2, 2),
+    )
+    .into_styled(fill)
+    .draw(display)
+    .unwrap();
+
+    let mut i = 0;
+
     info!("waiting for DHCP...");
     Timer::after_nanos(20000).await;
     while !stack.is_config_up() {
+        info!("checking DHCP");
         Timer::after_millis(100).await;
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(20, 49), Size::new(50 + (50 * (i / 10)), 6)),
+            Size::new(2, 2),
+        )
+        .into_styled(fill)
+        .draw(display)
+        .unwrap();
+        if i < 10 {
+            i += 1;
+        }
     }
+
     info!(
         "DHCP is now up! {:?}",
         stack.config_v4().unwrap().address.address()
     );
     Timer::after_nanos(20000).await;
 
+    RoundedRectangle::with_equal_corners(
+        Rectangle::new(Point::new(20, 49), Size::new(100, 6)),
+        Size::new(2, 2),
+    )
+    .into_styled(fill)
+    .draw(display)
+    .unwrap();
+
     info!("waiting for link up...");
     Timer::after_nanos(20000).await;
     while !stack.is_link_up() {
         Timer::after_millis(500).await;
     }
+
+    RoundedRectangle::with_equal_corners(
+        Rectangle::new(Point::new(20, 49), Size::new(110, 6)),
+        Size::new(2, 2),
+    )
+    .into_styled(fill)
+    .draw(display)
+    .unwrap();
+
     info!("Link is up!");
     Timer::after_nanos(20000).await;
 
@@ -141,11 +242,24 @@ pub async fn setup(
     info!("Stack is up!");
     Timer::after_nanos(20000).await;
 
+    RoundedRectangle::with_equal_corners(
+        Rectangle::new(Point::new(20, 49), Size::new(120, 6)),
+        Size::new(2, 2),
+    )
+    .into_styled(fill)
+    .draw(display)
+    .unwrap();
+
+    display.clear(Rgb565::new(31, 60, 27)).unwrap();
+
     stack
 }
 
 pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) -> Result<u32, Error> {
-    let mut rx_buffer = [0; 8192];
+    static RX_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
+    let rx_buffer = RX_BUF.init([0; 8192]);
+    //let mut tls_read_buffer = [0; 16640];
+    //let mut tls_write_buffer = [0; 16640];
 
     let client_state = TcpClientState::<1, 1024, 1024>::new();
     let tcp_client = TcpClient::new(stack, &client_state);
@@ -177,7 +291,9 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) -> Resu
 
     req = req.headers(&header);
 
-    let resp = req.send(&mut rx_buffer).await?;
+    let resp = req.send(rx_buffer).await?;
+
+    //info!("{:?}", rx_buffer);
 
     info!("made request");
     Timer::after_nanos(20000).await;
@@ -194,6 +310,10 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) -> Resu
     if body.ok {
         Ok(body.data.unwrap().sessions)
     } else {
-        Err(Error::Dns)
+        error!(
+            "Recieved the response, but it failed with error: {:?}",
+            body.error.unwrap()
+        );
+        Err(Error::AlreadySent)
     }
 }
