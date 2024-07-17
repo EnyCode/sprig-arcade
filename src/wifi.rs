@@ -15,10 +15,6 @@ use embassy_rp::{
     pio::Pio,
     Peripherals,
 };
-use embassy_sync::{
-    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex, ThreadModeRawMutex},
-    mutex::Mutex,
-};
 use embassy_time::Timer;
 use heapless::String;
 use log::{error, info};
@@ -26,12 +22,24 @@ use rand::RngCore;
 use reqwless::{
     client::{HttpClient, TlsConfig, TlsVerify},
     request::RequestBuilder,
+    Error,
 };
+use serde::Deserialize;
 use static_cell::StaticCell;
 
 use crate::Irqs;
 
-static STACK: Mutex<ThreadModeRawMutex, Stack<cyw43::NetDriver<'static>>> = Mutex::new();
+#[derive(Deserialize, Debug)]
+pub struct StatsResponse {
+    ok: bool,
+    data: Option<StatsData>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct StatsData {
+    pub sessions: u32,
+    pub total: u32,
+}
 
 #[embassy_executor::task]
 async fn wifi_task(
@@ -57,7 +65,7 @@ pub async fn setup(
     dio: PIN_24,
     clk: PIN_29,
     dma_ch: DMA_CH0,
-) {
+) -> &'static Stack<cyw43::NetDriver<'static>> {
     let mut rng = RoscRng;
 
     let fw = include_bytes!("../firmware/43439A0.bin");
@@ -83,6 +91,7 @@ pub async fn setup(
 
     let seed = rng.next_u64();
 
+    static STACK: StaticCell<Stack<cyw43::NetDriver<'static>>> = StaticCell::new();
     static RESOURCES: StaticCell<StackResources<5>> = StaticCell::new();
     let stack = &*STACK.init(Stack::new(
         net_device,
@@ -131,46 +140,36 @@ pub async fn setup(
     stack.wait_config_up().await;
     info!("Stack is up!");
     Timer::after_nanos(20000).await;
+
+    stack
 }
 
-async fn get_stats() {
+pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) -> Result<u32, Error> {
     let mut rx_buffer = [0; 8192];
-    let mut tls_read_buffer = [0; 16640];
-    let mut tls_write_buffer = [0; 16640];
-
-    let stack = *STACK;
 
     let client_state = TcpClientState::<1, 1024, 1024>::new();
     let tcp_client = TcpClient::new(stack, &client_state);
     let dns_client = DnsSocket::new(stack);
 
     // TODO: use tls
-    let tls_config = TlsConfig::new(
+    /*let tls_config = TlsConfig::new(
         seed,
         &mut tls_read_buffer,
         &mut tls_write_buffer,
         TlsVerify::None,
-    );
+    );*/
 
     let mut http_client = HttpClient::new(&tcp_client, &dns_client);
-    // combine "http://hackhour.hackclub.com/api/stats/" with env!("SLACK_ID")
+
     let mut url = String::<50>::new();
     url.push_str("http://hackhour.hackclub.com/api/stats/")
         .unwrap();
     url.push_str(env!("SLACK_ID")).unwrap();
     info!("{:?}", url);
 
-    let mut req = match http_client
+    let mut req = http_client
         .request(reqwless::request::Method::GET, &url)
-        .await
-    {
-        Ok(req) => req,
-        Err(e) => {
-            error!("Failed to make HTTP request: {:?}", e);
-            Timer::after_nanos(20000).await;
-            return; // handle the error
-        }
-    };
+        .await?;
 
     let mut auth = String::<46>::from_str("Bearer ").unwrap();
     auth.push_str(env!("API_TOKEN")).unwrap();
@@ -178,22 +177,23 @@ async fn get_stats() {
 
     req = req.headers(&header);
 
-    let resp = match req.send(&mut rx_buffer).await {
-        Ok(resp) => resp,
-        Err(e) => {
-            error!("Failed to send HTTP request: {:?}", e);
-            Timer::after_nanos(20000).await;
-            return; // handle the error;
-        }
-    };
+    let resp = req.send(&mut rx_buffer).await?;
 
     info!("made request");
     Timer::after_nanos(20000).await;
 
-    let body = from_utf8(resp.body().read_to_end().await.unwrap()).unwrap();
-    info!("response: {}", body);
+    let body: StatsResponse = serde_json_core::from_slice(resp.body().read_to_end().await.unwrap())
+        .unwrap()
+        .0;
+    info!("response: {:?}", body);
     Timer::after_nanos(20000).await;
 
     info!("connecting to {}", &url);
     Timer::after_nanos(20000).await;
+
+    if body.ok {
+        Ok(body.data.unwrap().sessions)
+    } else {
+        Err(Error::Dns)
+    }
 }

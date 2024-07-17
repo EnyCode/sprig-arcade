@@ -305,14 +305,6 @@ async fn main(spawner: Spawner) {
 
     // BOILERPLATE MARK
 
-    wifi::setup(
-        &spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0,
-    )
-    .await;
-
-    info!("Done w/ wifi");
-    Timer::after_secs(1).await;
-
     spawner
         .spawn(input_task(
             Input::new(AnyPin::from(p.PIN_5), embassy_rp::gpio::Pull::Up),
@@ -348,9 +340,18 @@ async fn main(spawner: Spawner) {
         .draw(&mut disp)
         .unwrap();
 
-    info!("Done!");
+    info!("Done! Configuring Wifi.");
     Timer::after_nanos(20000).await;
-    let tick_counter = 0;
+
+    let wifi = wifi::setup(
+        &spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0,
+    )
+    .await;
+
+    info!("Done with wifi");
+    Timer::after_secs(1).await;
+
+    let mut tick_counter = 1000 * 60 * 5;
 
     loop {
         Timer::after_millis(1).await;
@@ -371,8 +372,13 @@ async fn main(spawner: Spawner) {
             _ => {}
         }
 
-        if tick_counter > (1000 * 60 * 5) {
+        if tick_counter >= (1000 * 60 * 5) {
             info!("updating bar");
+            tick_counter = 0;
+            let r = wifi::get_hours(wifi).await;
+            if r.is_err() {
+                info!("error getting hours");
+            }
         }
     }
 }
