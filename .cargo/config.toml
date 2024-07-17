@@ -6,3 +6,8 @@ target = "thumbv6m-none-eabi"
 
 [env]
 DEFMT_LOG = "debug"
+
+WIFI_NETWORK = "SSID"
+WIFI_PASSWD = "PASSWORD"
+SLACK_ID = "SLACK_ID"
+API_TOKEN = "UUID"

@@ -4,6 +4,7 @@
 
 use core::any::Any;
 use core::cell::RefCell;
+use core::future::IntoFuture;
 
 use cyw43_pio::PioSpi;
 use defmt::*;
@@ -45,9 +46,10 @@ bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
 
-mod config;
 mod gui;
 mod wifi;
+
+pub const TICKET_GOAL: u16 = 120;
 
 // we import everything here to avoid repeats and for ease of use
 // makes it easier to eventually move to a fixed memory location if their all together (probably)
@@ -97,6 +99,7 @@ pub enum Button {
 pub enum Events {
     ButtonPressed(Button),
     ButtonReleased(Button),
+    Placeholder,
 }
 
 #[embassy_executor::task]
@@ -347,9 +350,13 @@ async fn main(spawner: Spawner) {
 
     info!("Done!");
     Timer::after_nanos(20000).await;
+    let tick_counter = 0;
 
     loop {
-        match EVENTS.receive().await {
+        Timer::after_millis(1).await;
+        tick_counter += 1;
+
+        match EVENTS.try_receive().unwrap_or(Events::Placeholder) {
             Events::ButtonPressed(button) => match button {
                 Button::Left | Button::Right => {
                     selected = move_nav(&selected, &active, &button, &mut disp).await;
@@ -361,6 +368,11 @@ async fn main(spawner: Spawner) {
                 info!("released {:?}", button);
                 info!("------------------");
             }
+            _ => {}
+        }
+
+        if tick_counter > (1000 * 60 * 5) {
+            info!("updating bar");
         }
     }
 }
