@@ -21,6 +21,19 @@ const PICO_FONT: MonoFont = MonoFont {
     strikethrough: DecorationDimensions::default_strikethrough(3),
 };
 
+const NUMBER_FONT: MonoFont = MonoFont {
+    image: ImageRaw::new(include_bytes!("../assets/numbers.raw"), 80),
+    glyph_mapping: &StrGlyphMapping::new("0123456789", 0),
+    character_size: Size::new(8, 10),
+    character_spacing: 0,
+    baseline: 0,
+    // TODO: double check this
+    underline: DecorationDimensions::default_underline(6),
+    strikethrough: DecorationDimensions::default_strikethrough(3),
+};
+
+pub const NUMBER_CHAR: MonoTextStyle<Rgb565> =
+    MonoTextStyle::new(&NUMBER_FONT, Rgb565::new(1, 44, 23));
 pub const BLACK_CHAR: MonoTextStyle<Rgb565> = MonoTextStyle::new(&PICO_FONT, Rgb565::BLACK);
 pub const NORMAL_TEXT: TextStyle = TextStyleBuilder::new()
     .baseline(Baseline::Alphabetic)
@@ -97,45 +110,67 @@ pub mod nav {
 pub mod home {
     use core::f32::consts::PI;
 
-    use embassy_rp::pac::clocks::Clocks;
+    use core::fmt::Write;
+    use embassy_rp::pac::common::W;
     use embassy_time::Timer;
     use embedded_graphics::{
         geometry::{Point, Size},
+        image::Image,
         primitives::{Primitive, Rectangle, RoundedRectangle},
+        text::Text,
         Drawable,
     };
+    use heapless::String;
     use log::info;
     use micromath::F32Ext;
+    use tinytga::Tga;
 
-    use crate::{Display, TICKET_GOAL, TICKET_OFFSET};
-
-    use super::{PROGRESS_BG, PROGRESS_BLUE};
+    use super::{CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE};
+    use crate::{Display, TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET};
 
     pub async fn init(disp: &mut Display<'_>) {
         // NOTE FOR SELF: by this point the display has been cleared
         // TODO: move arcade logo drawing to here
     }
 
-    pub async fn update_progress(disp: &mut Display<'_>, ticket_count: u16) {
+    pub async fn update_progress(disp: &mut Display<'_>, ticket_count: u16, old_count: u16) {
         RoundedRectangle::with_equal_corners(
             Rectangle::new(Point::new(20, 53), Size::new(120, 6)),
             Size::new(2, 2),
         )
-        .into_styled(PROGRESS_BG);
-        //.draw(disp)
-        //.unwrap();
+        .into_styled(PROGRESS_BG)
+        .draw(disp)
+        .unwrap();
+
+        let mut count = String::<4>::new();
+        write!(count, "{} ", ticket_count).unwrap();
+        info!("{:?}", count);
+
+        Text::with_text_style(&count, Point::new(80, 35), NUMBER_CHAR, CENTERED_TEXT)
+            .draw(disp)
+            .unwrap();
+
+        Image::new(
+            &Tga::from_slice(TICKET_LARGE).unwrap(),
+            Point::new(80 + (4 * (count.len() - 1)) as i32, 30),
+        )
+        .draw(disp)
+        .unwrap();
 
         // 1 second long animation
         // TODO: expected progress
-
-        let full = (ticket_count - TICKET_OFFSET) as f32 / TICKET_GOAL as f32;
+        let prev = (old_count - TICKET_OFFSET) as f32 / TICKET_GOAL as f32;
+        let change = (ticket_count - old_count) as f32 / TICKET_GOAL as f32;
         for i in 0..30 {
             let mul = -((PI * (i as f32 / 30.)).cos() - 1.) / 2.;
 
-            info!("width: {:?}", (120. * full * mul) as u32);
+            info!("width: {:?}", (120. * change * mul + prev) as u32);
 
             RoundedRectangle::with_equal_corners(
-                Rectangle::new(Point::new(20, 53), Size::new((120. * full * mul) as u32, 6)),
+                Rectangle::new(
+                    Point::new(20, 53),
+                    Size::new((120. * change * mul + prev) as u32, 6),
+                ),
                 Size::new(2, 2),
             )
             .into_styled(PROGRESS_BLUE)

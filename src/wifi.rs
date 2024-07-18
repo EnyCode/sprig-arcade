@@ -13,27 +13,34 @@ use embassy_rp::{
     gpio::{Level, Output},
     peripherals::{DMA_CH0, PIN_23, PIN_24, PIN_25, PIN_29, PIO0},
     pio::Pio,
+    Peripherals,
 };
 use embassy_time::Timer;
+use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::{
     geometry::{Point, Size},
     primitives::Primitive,
     text::Text,
 };
 use embedded_graphics::{
-    primitives::{Rectangle, RoundedRectangle},
+    pixelcolor::Rgb565,
+    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
     Drawable,
 };
 use heapless::String;
 use log::{error, info};
 use rand::RngCore;
-use reqwless::{client::HttpClient, request::RequestBuilder, Error};
+use reqwless::{
+    client::{HttpClient, TlsConfig, TlsVerify},
+    request::RequestBuilder,
+    Error,
+};
 use serde::Deserialize;
 use static_cell::StaticCell;
 
 use crate::{
-    gui::{BLACK_CHAR, CENTERED_TEXT, PROGRESS_BG, PROGRESS_BLUE},
-    Irqs,
+    gui::{BLACK_CHAR, CENTERED_TEXT},
+    Irqs, EVENTS, TICKETS,
 };
 
 #[derive(Deserialize, Debug)]
@@ -75,23 +82,31 @@ pub async fn setup(
     dma_ch: DMA_CH0,
     display: &mut crate::Display<'_>,
 ) -> &'static Stack<cyw43::NetDriver<'static>> {
-    Text::with_text_style("Loading...", Point::new(80, 45), BLACK_CHAR, CENTERED_TEXT)
+    Text::with_text_style("Loading...", Point::new(80, 40), BLACK_CHAR, CENTERED_TEXT)
         .draw(display)
         .unwrap();
 
+    let background = PrimitiveStyleBuilder::new()
+        .fill_color(Rgb565::new(30, 57, 24))
+        .build();
+
+    let fill = PrimitiveStyleBuilder::new()
+        .fill_color(Rgb565::new(1, 44, 23))
+        .build();
+
     RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(20, 53), Size::new(120, 6)),
+        Rectangle::new(Point::new(20, 49), Size::new(120, 6)),
         Size::new(2, 2),
     )
-    .into_styled(PROGRESS_BG)
+    .into_styled(background)
     .draw(display)
     .unwrap();
 
     RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(20, 53), Size::new(5, 6)),
+        Rectangle::new(Point::new(20, 49), Size::new(5, 6)),
         Size::new(2, 2),
     )
-    .into_styled(PROGRESS_BLUE)
+    .into_styled(fill)
     .draw(display)
     .unwrap();
 
@@ -117,10 +132,10 @@ pub async fn setup(
         .await;
 
     RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(20, 53), Size::new(20, 6)),
+        Rectangle::new(Point::new(20, 49), Size::new(20, 6)),
         Size::new(2, 2),
     )
-    .into_styled(PROGRESS_BLUE)
+    .into_styled(fill)
     .draw(display)
     .unwrap();
 
@@ -140,10 +155,10 @@ pub async fn setup(
     spawner.spawn(net_task(stack)).unwrap();
 
     RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(20, 53), Size::new(30, 6)),
+        Rectangle::new(Point::new(20, 49), Size::new(30, 6)),
         Size::new(2, 2),
     )
-    .into_styled(PROGRESS_BLUE)
+    .into_styled(fill)
     .draw(display)
     .unwrap();
 
@@ -164,10 +179,10 @@ pub async fn setup(
     }
 
     RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(20, 53), Size::new(50, 6)),
+        Rectangle::new(Point::new(20, 49), Size::new(50, 6)),
         Size::new(2, 2),
     )
-    .into_styled(PROGRESS_BLUE)
+    .into_styled(fill)
     .draw(display)
     .unwrap();
 
@@ -179,10 +194,10 @@ pub async fn setup(
         info!("checking DHCP");
         Timer::after_millis(100).await;
         RoundedRectangle::with_equal_corners(
-            Rectangle::new(Point::new(20, 53), Size::new(50 + (50 * (i / 10)), 6)),
+            Rectangle::new(Point::new(20, 49), Size::new(50 + (50 * (i / 10)), 6)),
             Size::new(2, 2),
         )
-        .into_styled(PROGRESS_BLUE)
+        .into_styled(fill)
         .draw(display)
         .unwrap();
         if i < 10 {
@@ -197,10 +212,10 @@ pub async fn setup(
     Timer::after_nanos(20000).await;
 
     RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(20, 53), Size::new(100, 6)),
+        Rectangle::new(Point::new(20, 49), Size::new(100, 6)),
         Size::new(2, 2),
     )
-    .into_styled(PROGRESS_BLUE)
+    .into_styled(fill)
     .draw(display)
     .unwrap();
 
@@ -211,10 +226,10 @@ pub async fn setup(
     }
 
     RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(20, 53), Size::new(110, 6)),
+        Rectangle::new(Point::new(20, 49), Size::new(110, 6)),
         Size::new(2, 2),
     )
-    .into_styled(PROGRESS_BLUE)
+    .into_styled(fill)
     .draw(display)
     .unwrap();
 
@@ -228,17 +243,20 @@ pub async fn setup(
     Timer::after_nanos(20000).await;
 
     RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(20, 53), Size::new(120, 6)),
+        Rectangle::new(Point::new(20, 49), Size::new(120, 6)),
         Size::new(2, 2),
     )
-    .into_styled(PROGRESS_BLUE)
+    .into_styled(fill)
     .draw(display)
     .unwrap();
+
+    display.clear(Rgb565::new(31, 60, 27)).unwrap();
 
     stack
 }
 
-pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) -> Result<u32, Error> {
+#[embassy_executor::task]
+pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
     static RX_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
     let rx_buffer = RX_BUF.init([0; 8192]);
     //let mut tls_read_buffer = [0; 16640];
@@ -264,9 +282,12 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) -> Resu
     url.push_str(env!("SLACK_ID")).unwrap();
     info!("{:?}", url);
 
+    // TODO: better error handling
+
     let mut req = http_client
         .request(reqwless::request::Method::GET, &url)
-        .await?;
+        .await
+        .unwrap();
 
     let mut auth = String::<46>::from_str("Bearer ").unwrap();
     auth.push_str(env!("API_TOKEN")).unwrap();
@@ -274,28 +295,31 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) -> Resu
 
     req = req.headers(&header);
 
-    let resp = req.send(rx_buffer).await?;
+    let resp = req.send(rx_buffer).await.unwrap();
 
     //info!("{:?}", rx_buffer);
 
-    info!(
-        "made request with response: {:?}",
-        from_utf8(resp.body().read_to_end().await.unwrap())
-    );
+    info!("sent request");
     Timer::after_nanos(20000).await;
+    let bytes = match resp.body().read_to_end().await {
+        Ok(by) => by,
+        Err(e) => {
+            error!("error reading response: {:?}", e);
+            return;
+        }
+    };
 
-    info!("this is chill right?");
-    Timer::after_nanos(200000).await;
-
-    /*let body: Result<(StatsResponse, usize), serde_json_core::de::Error> =
-        serde_json_core::from_slice(resp.body().read_to_end().await.unwrap());
-    if body.is_err() {
-        error!("Failed to parse response: {:?}", body.err().unwrap());
-        return Err(Error::AlreadySent);
-    }
-    let body = body.unwrap().0;
-    //.unwrap()
-    //.0;
+    let body: StatsResponse = match serde_json_core::from_slice(bytes) {
+        Ok(b) => b.0,
+        Err(e) => {
+            error!(
+                "error parsing response {:?} with error {:?}",
+                from_utf8(bytes),
+                e
+            );
+            return;
+        }
+    };
     info!("response: {:?}", body);
     Timer::after_nanos(20000).await;
 
@@ -303,13 +327,13 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) -> Resu
     Timer::after_nanos(20000).await;
 
     if body.ok {
-        Ok(body.data.unwrap().sessions)
+        //info!("sessions: {}, total: {}", body.data.unwrap().sessions, body.data.unwrap().total);
+        EVENTS
+            .send(crate::Events::TicketCountUpdated(
+                body.data.unwrap().sessions as u16,
+            ))
+            .await;
     } else {
-        error!(
-            "Recieved the response, but it failed with error: {:?}",
-            body.error.unwrap()
-        );
-        Err(Error::AlreadySent)
-    }*/
-    Err(Error::BufferTooSmall)
+        error!("error: {}", body.error.unwrap());
+    }
 }

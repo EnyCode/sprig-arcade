@@ -5,6 +5,7 @@
 use core::any::Any;
 use core::cell::RefCell;
 use core::future::IntoFuture;
+use core::sync::atomic::AtomicU16;
 
 use cyw43_pio::PioSpi;
 use defmt::*;
@@ -52,6 +53,7 @@ mod wifi;
 
 pub const TICKET_GOAL: u16 = 160;
 pub const TICKET_OFFSET: u16 = 14;
+pub const TICKETS: AtomicU16 = AtomicU16::new(40);
 
 // we import everything here to avoid repeats and for ease of use
 // makes it easier to eventually move to a fixed memory location if their all together (probably)
@@ -68,6 +70,8 @@ const PROJECTS_ICON: &'static [u8; 182] = include_bytes!("../assets/buttons/proj
 const WISHLIST_ICON: &'static [u8; 218] = include_bytes!("../assets/buttons/wishlist.tga");
 const SHOP_ICON: &'static [u8; 204] = include_bytes!("../assets/buttons/shop.tga");
 const ERRORS_ICON: &'static [u8; 212] = include_bytes!("../assets/buttons/errors.tga");
+
+const TICKET_LARGE: &'static [u8; 646] = include_bytes!("../assets/ticket_large.tga");
 
 type Display<'a> = ST7735<
     SpiDeviceWithConfig<
@@ -101,6 +105,7 @@ pub enum Button {
 pub enum Events {
     ButtonPressed(Button),
     ButtonReleased(Button),
+    TicketCountUpdated(u16),
     Placeholder,
 }
 
@@ -297,7 +302,7 @@ async fn main(spawner: Spawner) -> ! {
     let dcx = Output::new(dcx, Level::Low);
     let rst = Output::new(rst, Level::Low);
 
-    let mut bl = Output::new(bl, Level::Low);
+    let _bl = Output::new(bl, Level::High);
 
     let mut disp: Display = ST7735::new(display_spi, dcx, rst, true, false, 160, 128);
 
@@ -331,8 +336,6 @@ async fn main(spawner: Spawner) -> ! {
     let btn: Tga<Rgb565> = Tga::from_slice(BTN).unwrap();
     let selected_btn: Tga<Rgb565> = Tga::from_slice(SELECTED_BTN).unwrap();
 
-    disp.clear(Rgb565::new(31, 60, 27)).unwrap();
-
     Image::new(&logo, Point::new(30, 98))
         .draw(&mut disp)
         .unwrap();
@@ -355,10 +358,6 @@ async fn main(spawner: Spawner) -> ! {
     info!("Done!");
     Timer::after_nanos(20000).await;
 
-    home::init(&mut disp).await;
-
-    bl.set_high();
-
     let mut tick_counter = 1000 * 60 * 5;
 
     loop {
@@ -377,25 +376,21 @@ async fn main(spawner: Spawner) -> ! {
                 info!("released {:?}", button);
                 info!("------------------");
             }
+            Events::TicketCountUpdated(tickets) => {
+                info!("got the event!");
+                let old = TICKETS.load(core::sync::atomic::Ordering::Relaxed);
+                TICKETS.store(tickets, core::sync::atomic::Ordering::Relaxed);
+
+                home::update_progress(&mut disp, tickets as u16, old).await;
+            }
             _ => {}
         }
 
-        if tick_counter >= (1000 * 60 * 5) {
+        if tick_counter >= (1000 * 1 * 5) {
+            info!("spawning get hours");
             tick_counter = 0;
-            let r = wifi::get_hours(wifi).await;
-            if r.is_err() {
-                let err = r.unwrap_err();
-                match err {
-                    reqwless::Error::AlreadySent => (),
-                    _ => error!("Failed retrieving hours with error {:?}", err),
-                };
-                Timer::after_nanos(20000).await;
-            } else {
-                info!("Got hours successfully");
-                Timer::after_nanos(20000).await;
-                home::update_progress(&mut disp, 1).await;
-                //info!("You have {:?} hours.", r.unwrap());
-            }
+            spawner.spawn(wifi::get_hours(wifi)).unwrap();
+            info!("spawned");
         }
     }
 }
