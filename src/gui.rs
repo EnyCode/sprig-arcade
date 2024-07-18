@@ -3,6 +3,7 @@ use embedded_graphics::{
     image::ImageRaw,
     mono_font::{mapping::StrGlyphMapping, DecorationDimensions, MonoFont, MonoTextStyle},
     pixelcolor::{Rgb565, RgbColor},
+    primitives::{PrimitiveStyle, PrimitiveStyleBuilder},
     text::{Alignment, Baseline, TextStyle, TextStyleBuilder},
 };
 
@@ -20,9 +21,6 @@ const PICO_FONT: MonoFont = MonoFont {
     strikethrough: DecorationDimensions::default_strikethrough(3),
 };
 
-pub const WHITE_CHAR: MonoTextStyle<Rgb565> = MonoTextStyle::new(&PICO_FONT, Rgb565::WHITE);
-pub const GREY_CHAR: MonoTextStyle<Rgb565> =
-    MonoTextStyle::new(&PICO_FONT, Rgb565::new(24, 49, 24));
 pub const BLACK_CHAR: MonoTextStyle<Rgb565> = MonoTextStyle::new(&PICO_FONT, Rgb565::BLACK);
 pub const NORMAL_TEXT: TextStyle = TextStyleBuilder::new()
     .baseline(Baseline::Alphabetic)
@@ -31,6 +29,18 @@ pub const NORMAL_TEXT: TextStyle = TextStyleBuilder::new()
 pub const CENTERED_TEXT: TextStyle = TextStyleBuilder::new()
     .baseline(Baseline::Middle)
     .alignment(Alignment::Center)
+    .build();
+
+pub const PROGRESS_BG: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
+    .fill_color(Rgb565::new(30, 57, 24))
+    .build();
+
+pub const PROGRESS_BLUE: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
+    .fill_color(Rgb565::new(1, 44, 23))
+    .build();
+
+pub const PROGRESS_ORANGE: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
+    .fill_color(Rgb565::new(32, 23, 0))
     .build();
 
 pub mod nav {
@@ -84,8 +94,55 @@ pub mod nav {
     }
 }
 
-mod home {
-    use crate::Display;
+pub mod home {
+    use core::f32::consts::PI;
 
-    pub fn draw(disp: &mut Display) {}
+    use embassy_rp::pac::clocks::Clocks;
+    use embassy_time::Timer;
+    use embedded_graphics::{
+        geometry::{Point, Size},
+        primitives::{Primitive, Rectangle, RoundedRectangle},
+        Drawable,
+    };
+    use log::info;
+    use micromath::F32Ext;
+
+    use crate::{Display, TICKET_GOAL, TICKET_OFFSET};
+
+    use super::{PROGRESS_BG, PROGRESS_BLUE};
+
+    pub async fn init(disp: &mut Display<'_>) {
+        // NOTE FOR SELF: by this point the display has been cleared
+        // TODO: move arcade logo drawing to here
+    }
+
+    pub async fn update_progress(disp: &mut Display<'_>, ticket_count: u16) {
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(20, 53), Size::new(120, 6)),
+            Size::new(2, 2),
+        )
+        .into_styled(PROGRESS_BG);
+        //.draw(disp)
+        //.unwrap();
+
+        // 1 second long animation
+        // TODO: expected progress
+
+        let full = (ticket_count - TICKET_OFFSET) as f32 / TICKET_GOAL as f32;
+        for i in 0..30 {
+            let mul = -((PI * (i as f32 / 30.)).cos() - 1.) / 2.;
+
+            info!("width: {:?}", (120. * full * mul) as u32);
+
+            RoundedRectangle::with_equal_corners(
+                Rectangle::new(Point::new(20, 53), Size::new((120. * full * mul) as u32, 6)),
+                Size::new(2, 2),
+            )
+            .into_styled(PROGRESS_BLUE)
+            .draw(disp)
+            .unwrap();
+
+            Timer::after_millis(33).await;
+        }
+    }
 }

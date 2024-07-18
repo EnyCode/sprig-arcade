@@ -34,6 +34,7 @@ use embedded_graphics::image::Image;
 use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
 use embedded_graphics::primitives::{Primitive, PrimitiveStyle, Rectangle};
 use embedded_graphics::Drawable;
+use gui::home;
 use gui::nav::{update_active, update_selected};
 use heapless::Vec;
 use log::info;
@@ -49,7 +50,8 @@ bind_interrupts!(struct Irqs {
 mod gui;
 mod wifi;
 
-pub const TICKET_GOAL: u16 = 120;
+pub const TICKET_GOAL: u16 = 160;
+pub const TICKET_OFFSET: u16 = 14;
 
 // we import everything here to avoid repeats and for ease of use
 // makes it easier to eventually move to a fixed memory location if their all together (probably)
@@ -295,7 +297,7 @@ async fn main(spawner: Spawner) -> ! {
     let dcx = Output::new(dcx, Level::Low);
     let rst = Output::new(rst, Level::Low);
 
-    let _bl = Output::new(bl, Level::High);
+    let mut bl = Output::new(bl, Level::Low);
 
     let mut disp: Display = ST7735::new(display_spi, dcx, rst, true, false, 160, 128);
 
@@ -329,6 +331,8 @@ async fn main(spawner: Spawner) -> ! {
     let btn: Tga<Rgb565> = Tga::from_slice(BTN).unwrap();
     let selected_btn: Tga<Rgb565> = Tga::from_slice(SELECTED_BTN).unwrap();
 
+    disp.clear(Rgb565::new(31, 60, 27)).unwrap();
+
     Image::new(&logo, Point::new(30, 98))
         .draw(&mut disp)
         .unwrap();
@@ -350,6 +354,10 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Done!");
     Timer::after_nanos(20000).await;
+
+    home::init(&mut disp).await;
+
+    bl.set_high();
 
     let mut tick_counter = 1000 * 60 * 5;
 
@@ -373,7 +381,6 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         if tick_counter >= (1000 * 60 * 5) {
-            info!("updating bar");
             tick_counter = 0;
             let r = wifi::get_hours(wifi).await;
             if r.is_err() {
@@ -382,8 +389,12 @@ async fn main(spawner: Spawner) -> ! {
                     reqwless::Error::AlreadySent => (),
                     _ => error!("Failed retrieving hours with error {:?}", err),
                 };
+                Timer::after_nanos(20000).await;
             } else {
-                info!("You have {:?} hours.", r.unwrap());
+                info!("Got hours successfully");
+                Timer::after_nanos(20000).await;
+                home::update_progress(&mut disp, 1).await;
+                //info!("You have {:?} hours.", r.unwrap());
             }
         }
     }
