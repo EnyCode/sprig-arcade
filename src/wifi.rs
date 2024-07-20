@@ -257,83 +257,86 @@ pub async fn setup(
 
 #[embassy_executor::task]
 pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
-    static RX_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
-    let rx_buffer = RX_BUF.init([0; 8192]);
-    //let mut tls_read_buffer = [0; 16640];
-    //let mut tls_write_buffer = [0; 16640];
+    loop {
+        static RX_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
+        let rx_buffer = RX_BUF.init([0; 8192]);
+        //let mut tls_read_buffer = [0; 16640];
+        //let mut tls_write_buffer = [0; 16640];
 
-    let client_state = TcpClientState::<1, 1024, 1024>::new();
-    let tcp_client = TcpClient::new(stack, &client_state);
-    let dns_client = DnsSocket::new(stack);
+        let client_state = TcpClientState::<1, 1024, 1024>::new();
+        let tcp_client = TcpClient::new(stack, &client_state);
+        let dns_client = DnsSocket::new(stack);
 
-    // TODO: use tls
-    /*let tls_config = TlsConfig::new(
-        seed,
-        &mut tls_read_buffer,
-        &mut tls_write_buffer,
-        TlsVerify::None,
-    );*/
+        // TODO: use tls
+        /*let tls_config = TlsConfig::new(
+            seed,
+            &mut tls_read_buffer,
+            &mut tls_write_buffer,
+            TlsVerify::None,
+        );*/
 
-    let mut http_client = HttpClient::new(&tcp_client, &dns_client);
+        let mut http_client = HttpClient::new(&tcp_client, &dns_client);
 
-    let mut url = String::<50>::new();
-    url.push_str("http://hackhour.hackclub.com/api/stats/")
-        .unwrap();
-    url.push_str(env!("SLACK_ID")).unwrap();
-    info!("{:?}", url);
+        let mut url = String::<50>::new();
+        url.push_str("http://hackhour.hackclub.com/api/stats/")
+            .unwrap();
+        url.push_str(env!("SLACK_ID")).unwrap();
+        info!("{:?}", url);
 
-    // TODO: better error handling
+        // TODO: better error handling
 
-    let mut req = http_client
-        .request(reqwless::request::Method::GET, &url)
-        .await
-        .unwrap();
+        let mut req = http_client
+            .request(reqwless::request::Method::GET, &url)
+            .await
+            .unwrap();
 
-    let mut auth = String::<46>::from_str("Bearer ").unwrap();
-    auth.push_str(env!("API_TOKEN")).unwrap();
-    let header = [("Authorization", auth.as_str())];
+        let mut auth = String::<46>::from_str("Bearer ").unwrap();
+        auth.push_str(env!("API_TOKEN")).unwrap();
+        let header = [("Authorization", auth.as_str())];
 
-    req = req.headers(&header);
+        req = req.headers(&header);
 
-    let resp = req.send(rx_buffer).await.unwrap();
+        let resp = req.send(rx_buffer).await.unwrap();
 
-    //info!("{:?}", rx_buffer);
+        //info!("{:?}", rx_buffer);
 
-    info!("sent request");
-    Timer::after_nanos(20000).await;
-    let bytes = match resp.body().read_to_end().await {
-        Ok(by) => by,
-        Err(e) => {
-            error!("error reading response: {:?}", e);
-            return;
+        info!("sent request");
+        Timer::after_nanos(20000).await;
+        let bytes = match resp.body().read_to_end().await {
+            Ok(by) => by,
+            Err(e) => {
+                error!("error reading response: {:?}", e);
+                return;
+            }
+        };
+
+        let body: StatsResponse = match serde_json_core::from_slice(bytes) {
+            Ok(b) => b.0,
+            Err(e) => {
+                error!(
+                    "error parsing response {:?} with error {:?}",
+                    from_utf8(bytes),
+                    e
+                );
+                return;
+            }
+        };
+        info!("response: {:?}", body);
+        Timer::after_nanos(20000).await;
+
+        info!("connecting to {}", &url);
+        Timer::after_nanos(20000).await;
+
+        if body.ok {
+            //info!("sessions: {}, total: {}", body.data.unwrap().sessions, body.data.unwrap().total);
+            EVENTS
+                .send(crate::Events::TicketCountUpdated(
+                    body.data.unwrap().sessions as u16,
+                ))
+                .await;
+        } else {
+            error!("error: {}", body.error.unwrap());
         }
-    };
-
-    let body: StatsResponse = match serde_json_core::from_slice(bytes) {
-        Ok(b) => b.0,
-        Err(e) => {
-            error!(
-                "error parsing response {:?} with error {:?}",
-                from_utf8(bytes),
-                e
-            );
-            return;
-        }
-    };
-    info!("response: {:?}", body);
-    Timer::after_nanos(20000).await;
-
-    info!("connecting to {}", &url);
-    Timer::after_nanos(20000).await;
-
-    if body.ok {
-        //info!("sessions: {}, total: {}", body.data.unwrap().sessions, body.data.unwrap().total);
-        EVENTS
-            .send(crate::Events::TicketCountUpdated(
-                body.data.unwrap().sessions as u16,
-            ))
-            .await;
-    } else {
-        error!("error: {}", body.error.unwrap());
+        Timer::after_secs(60 * 5).await;
     }
 }

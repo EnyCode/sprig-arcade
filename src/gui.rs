@@ -108,10 +108,11 @@ pub mod nav {
 }
 
 pub mod home {
-    use core::f32::consts::PI;
+    use core::{cmp::max, f32::consts::PI};
 
     use core::fmt::Write;
     use embassy_rp::pac::common::W;
+    use embassy_rp::peripherals::RTC;
     use embassy_time::Timer;
     use embedded_graphics::{
         geometry::{Point, Size},
@@ -143,33 +144,47 @@ pub mod home {
         .unwrap();
 
         let mut count = String::<4>::new();
-        write!(count, "{} ", ticket_count).unwrap();
+        write!(count, "{} ", ticket_count - TICKET_OFFSET).unwrap();
         info!("{:?}", count);
 
         Text::with_text_style(&count, Point::new(80, 35), NUMBER_CHAR, CENTERED_TEXT)
             .draw(disp)
             .unwrap();
 
-        Image::new(
-            &Tga::from_slice(TICKET_LARGE).unwrap(),
-            Point::new(80 + (4 * (count.len() - 1)) as i32, 30),
-        )
-        .draw(disp)
-        .unwrap();
+        let img = match Tga::from_slice(TICKET_LARGE) {
+            Ok(img) => img,
+            Err(err) => {
+                info!("errored with {:?}", err);
+                return;
+            }
+        };
+
+        Image::new(&img, Point::new(80 + (3 * (count.len() - 1)) as i32, 28))
+            .draw(disp)
+            .unwrap();
+
+        //let days_left = ;
+
+        let old = old_count
+            - if TICKET_OFFSET > old_count {
+                old_count
+            } else {
+                TICKET_OFFSET
+            };
 
         // 1 second long animation
         // TODO: expected progress
-        let prev = (old_count - TICKET_OFFSET) as f32 / TICKET_GOAL as f32;
-        let change = (ticket_count - old_count) as f32 / TICKET_GOAL as f32;
+        let prev = old as f32 / TICKET_GOAL as f32;
+        let change = (ticket_count - old) as f32 / TICKET_GOAL as f32;
         for i in 0..30 {
             let mul = -((PI * (i as f32 / 30.)).cos() - 1.) / 2.;
 
-            info!("width: {:?}", (120. * change * mul + prev) as u32);
+            info!("width: {:?}", (120. * ((change * mul) + prev)) as u32);
 
             RoundedRectangle::with_equal_corners(
                 Rectangle::new(
                     Point::new(20, 53),
-                    Size::new((120. * change * mul + prev) as u32, 6),
+                    Size::new((120. * ((change * mul) + prev)) as u32, 6),
                 ),
                 Size::new(2, 2),
             )

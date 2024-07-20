@@ -7,6 +7,7 @@ use core::cell::RefCell;
 use core::future::IntoFuture;
 use core::sync::atomic::AtomicU16;
 
+use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
@@ -51,9 +52,11 @@ bind_interrupts!(struct Irqs {
 mod gui;
 mod wifi;
 
+// TODO: move everything to settings
 pub const TICKET_GOAL: u16 = 160;
-pub const TICKET_OFFSET: u16 = 14;
-pub const TICKETS: AtomicU16 = AtomicU16::new(40);
+pub const TICKET_OFFSET: u16 = 16;
+pub const TICKETS: AtomicU16 = AtomicU16::new(0);
+pub const END_DATE: Mutex<NoopRawMutex, Option<DateTime<FixedOffset>>> = Mutex::new(None);
 
 // we import everything here to avoid repeats and for ease of use
 // makes it easier to eventually move to a fixed memory location if their all together (probably)
@@ -71,7 +74,7 @@ const WISHLIST_ICON: &'static [u8; 218] = include_bytes!("../assets/buttons/wish
 const SHOP_ICON: &'static [u8; 204] = include_bytes!("../assets/buttons/shop.tga");
 const ERRORS_ICON: &'static [u8; 212] = include_bytes!("../assets/buttons/errors.tga");
 
-const TICKET_LARGE: &'static [u8; 646] = include_bytes!("../assets/ticket_large.tga");
+const TICKET_LARGE: &'static [u8; 516] = include_bytes!("../assets/ticket_large.tga");
 
 type Display<'a> = ST7735<
     SpiDeviceWithConfig<
@@ -264,6 +267,15 @@ impl NavButton {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
+    {
+        *(END_DATE.lock().await) = Some(
+            FixedOffset::east_opt(14400)
+                .unwrap()
+                .timestamp_opt(1725163199, 0)
+                .unwrap(),
+        );
+    }
+
     let p = embassy_rp::init(Default::default());
     let driver = Driver::new(p.USB, Irqs);
     spawner.spawn(logger_task(driver)).unwrap();
@@ -358,13 +370,10 @@ async fn main(spawner: Spawner) -> ! {
     info!("Done!");
     Timer::after_nanos(20000).await;
 
-    let mut tick_counter = 1000 * 60 * 5;
+    spawner.spawn(wifi::get_hours(wifi)).unwrap();
 
     loop {
-        Timer::after_millis(1).await;
-        tick_counter += 1;
-
-        match EVENTS.try_receive().unwrap_or(Events::Placeholder) {
+        match EVENTS.receive().await {
             Events::ButtonPressed(button) => match button {
                 Button::Left | Button::Right => {
                     selected = move_nav(&selected, &active, &button, &mut disp).await;
@@ -380,17 +389,11 @@ async fn main(spawner: Spawner) -> ! {
                 info!("got the event!");
                 let old = TICKETS.load(core::sync::atomic::Ordering::Relaxed);
                 TICKETS.store(tickets, core::sync::atomic::Ordering::Relaxed);
+                info!("tickets {}, used to have {}", tickets, old);
 
                 home::update_progress(&mut disp, tickets as u16, old).await;
             }
             _ => {}
-        }
-
-        if tick_counter >= (1000 * 1 * 5) {
-            info!("spawning get hours");
-            tick_counter = 0;
-            spawner.spawn(wifi::get_hours(wifi)).unwrap();
-            info!("spawned");
         }
     }
 }

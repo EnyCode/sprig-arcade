@@ -77,6 +77,7 @@ st7735-lcd = "0.10.0"
 embedded-graphics-core = "0.4.0"
 tinytga = "0.5.0"
 micromath = "2.1.0"
+chrono = { version = "0.4.38", default-features = false }
 
 [profile.release]
 debug = 2
