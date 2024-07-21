@@ -53,9 +53,35 @@ bind_interrupts!(struct Irqs {
 mod gui;
 mod wifi;
 
+// TODO: replace legacy code with this
+#[macro_export]
+macro_rules! format {
+    ($size:expr, $($arg:tt)*) => {{
+        let mut string = heapless::String::<$size>::new();
+        match core::write!(&mut string, $($arg)*) {
+            Ok(_) => string,
+            Err(err) => {
+                log::error!("Failed to format string with error {:?}", err);
+                String::<$size>::new()
+            },
+        }
+    }};
+}
+
+// TODO: dont think this is needed
+#[macro_export]
+macro_rules! check {
+    ($e:expr, $default:expr) => {{
+        match $e {
+            x if x.overflowing() => $default,
+            x => x.0,
+        }
+    }};
+}
+
 // TODO: move everything to settings
 pub const TICKET_GOAL: u16 = 160;
-pub const TICKET_OFFSET: u16 = 16;
+pub const TICKET_OFFSET: u16 = 15;
 pub static TICKETS: AtomicU16 = AtomicU16::new(0);
 pub const END_DATE: Mutex<CriticalSectionRawMutex, Option<DateTime<FixedOffset>>> =
     Mutex::new(None);
@@ -78,6 +104,11 @@ const ERRORS_ICON: &'static [u8; 212] = include_bytes!("../assets/buttons/errors
 
 const TICKET_LARGE: &'static [u8; 471] = include_bytes!("../assets/ticket_large.tga");
 const TICKET_SMALL: &'static [u8; 187] = include_bytes!("../assets/ticket_small.tga");
+
+// TODO: if there is more side bars then move to similar system as top nav
+const PROGRESS_SELECTED: &'static [u8; 710] =
+    include_bytes!("../assets/home/progress_selected.tga");
+const STATS_SELECTED: &'static [u8; 710] = include_bytes!("../assets/home/stats_selected.tga");
 
 type Display<'a> = ST7735<
     SpiDeviceWithConfig<
@@ -268,13 +299,13 @@ impl NavButton {
     }
 }
 
-// TODO: get
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
     let p = embassy_rp::init(Default::default());
     let driver = Driver::new(p.USB, Irqs);
     spawner.spawn(logger_task(driver)).unwrap();
 
+    // TODO: necessary?
     for _ in 0..2 {
         info!(".");
         Timer::after_secs(1).await;
@@ -367,16 +398,20 @@ async fn main(spawner: Spawner) -> ! {
     info!("Done!");
     Timer::after_nanos(20000).await;
 
+    home::init(&mut disp).await;
+
     spawner.spawn(wifi::get_hours(wifi)).unwrap();
 
     loop {
+        // TODO: move screens to an enum?
+        // would make it simpler to manage and switch between screens
         match EVENTS.receive().await {
             Events::ButtonPressed(button) => match button {
                 Button::Left | Button::Right => {
                     selected = move_nav(&selected, &active, &button, &mut disp).await;
                 }
                 Button::A => active = select_btn(&selected, &active, &mut disp).await,
-                _ => {}
+                btn => home::input(btn, &mut disp).await,
             },
             Events::ButtonReleased(button) => {
                 info!("released {:?}", button);
@@ -388,7 +423,7 @@ async fn main(spawner: Spawner) -> ! {
                 TICKETS.store(tickets, Ordering::Relaxed);
                 info!("tickets {}, used to have {}", tickets, old,);
 
-                home::update_progress(&mut disp, tickets as u16, old, now).await;
+                home::update(&mut disp, tickets as u16, old, now).await;
             }
             _ => {}
         }

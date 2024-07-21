@@ -109,10 +109,12 @@ pub mod nav {
 }
 
 pub mod home {
+    use core::cmp::max;
     use core::{f32::consts::PI, sync::atomic::AtomicBool};
 
     use chrono::{DateTime, FixedOffset, TimeZone};
     use core::fmt::Write;
+    use core::sync::atomic::Ordering;
     use embassy_time::Timer;
     use embedded_graphics::draw_target::DrawTarget;
     use embedded_graphics::{
@@ -131,22 +133,64 @@ pub mod home {
 
     use super::{CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE, PROGRESS_ORANGE};
     use crate::gui::{BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
-    use crate::{Display, END_DATE, TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET, TICKET_SMALL};
+    use crate::{
+        check, format, Button, Display, END_DATE, PROGRESS_SELECTED, STATS_SELECTED, TICKET_GOAL,
+        TICKET_LARGE, TICKET_OFFSET, TICKET_SMALL,
+    };
+
+    static SELECTED: AtomicBool = AtomicBool::new(false);
 
     pub async fn init(disp: &mut Display<'_>) {
         // NOTE FOR SELF: by this point the display has been cleared
         // TODO: move arcade logo drawing to here
+        let img: Tga<Rgb565> = Tga::from_slice(PROGRESS_SELECTED).unwrap();
+        Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
     }
 
-    pub async fn update_progress(
+    pub async fn input(btn: Button, disp: &mut Display<'_>) {
+        match btn {
+            Button::Up => {
+                if !SELECTED.load(Ordering::Relaxed) {
+                    SELECTED.store(true, Ordering::Relaxed);
+                    let img: Tga<Rgb565> = Tga::from_slice(PROGRESS_SELECTED).unwrap();
+                    Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
+                }
+            }
+            Button::Down => {
+                if SELECTED.load(Ordering::Relaxed) {
+                    SELECTED.store(false, Ordering::Relaxed);
+                    let img: Tga<Rgb565> = Tga::from_slice(STATS_SELECTED).unwrap();
+                    Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
+                }
+            }
+            _ => (),
+        }
+    }
+
+    pub async fn update(
         disp: &mut Display<'_>,
         ticket_count: u16,
         old_count: u16,
         now: DateTime<FixedOffset>,
     ) {
-        info!("[GUI] updating gui");
-        Timer::after_nanos(200000).await;
+        match SELECTED.load(Ordering::Relaxed) {
+            true => {
+                info!("[GUI] Updating stats...");
+                update_stats(disp, ticket_count, now).await;
+            }
+            false => {
+                info!("[GUI] Updating progress bar...");
+                update_progress(disp, ticket_count, old_count, now).await;
+            }
+        }
+    }
 
+    async fn update_progress(
+        disp: &mut Display<'_>,
+        ticket_count: u16,
+        old_count: u16,
+        now: DateTime<FixedOffset>,
+    ) {
         let mut count = String::<4>::new();
         write!(count, "{} ", ticket_count - TICKET_OFFSET).unwrap();
         info!("{:?}", count);
@@ -223,15 +267,65 @@ pub mod home {
         .draw(disp)
         .unwrap();
 
-        Text::new("82% there!", Point::new(28, 62), BLACK_CHAR)
+        let per = (ticket_count - TICKET_OFFSET) as f32 / TICKET_GOAL as f32;
+        info!("Found per");
+        Timer::after_nanos(200000).await;
+
+        // TODO: increase max ticket count to 4 digits?
+        // TODO: max out percentage to 100%
+        let complete = format!(11, "{}% there!", (per * 100.).round());
+
+        info!("got complete");
+        Timer::after_nanos(200000).await;
+
+        let ideal = format!(
+            28,
+            "Should be {}% ({}  ) done!",
+            (ideal_percent * 100.).round(),
+            (ideal_percent * TICKET_GOAL as f32).round()
+        );
+
+        info!("got ideal");
+        Timer::after_nanos(200000).await;
+
+        info!(
+            "info is {:?}",
+            max(
+                TICKET_GOAL as i32 - ticket_count as i32 + TICKET_OFFSET as i32,
+                0
+            ),
+            //((1. - per) * 100.).round(),
+            // TODO: fix potention overflow
+            // its in more places than this
+            //TICKET_GOAL,
+            //ticket_count,
+            //TICKET_OFFSET,
+            //TICKET_GOAL - ticket_count + TICKET_OFFSET
+        );
+        Timer::after_nanos(200000).await;
+
+        let left = format!(
+            32,
+            "{}% left ({}  )!",
+            ((1. - per) * 100.).round() as u16,
+            max(
+                TICKET_GOAL as i16 - ticket_count as i16 + TICKET_OFFSET as i16,
+                0
+            ),
+        );
+
+        info!("got left");
+        Timer::after_nanos(200000).await;
+
+        Text::new(&complete, Point::new(28, 62), BLACK_CHAR)
             .draw(disp)
             .unwrap();
 
-        Text::new("Should be 46% (74  ) done!", Point::new(28, 71), BLACK_CHAR)
+        Text::new(&ideal, Point::new(28, 71), BLACK_CHAR)
             .draw(disp)
             .unwrap();
 
-        Text::new("18% left (29  )!", Point::new(28, 80), BLACK_CHAR)
+        Text::new(&left, Point::new(28, 80), BLACK_CHAR)
             .draw(disp)
             .unwrap();
 
@@ -243,8 +337,12 @@ pub mod home {
             }
         };
 
-        Image::new(&img, Point::new(96, 70)).draw(disp).unwrap();
-        Image::new(&img, Point::new(76, 79)).draw(disp).unwrap();
+        Image::new(&img, Point::new(28 + ((ideal.len() - 9) * 4) as i32, 70))
+            .draw(disp)
+            .unwrap();
+        Image::new(&img, Point::new(28 + ((left.len() - 4) * 4) as i32, 79))
+            .draw(disp)
+            .unwrap();
 
         // 1 second long animation
         // TODO: expected progress
@@ -310,7 +408,7 @@ pub mod home {
                     ),
                     Size::new(2, 2),
                 )
-                .into_styled(PROGRESS_BG)
+                .into_styled(PROGRESS_ORANGE)
                 .draw(&mut fbuf)
                 .unwrap();
             }
@@ -324,4 +422,6 @@ pub mod home {
 
         DRAWN.store(true, core::sync::atomic::Ordering::Relaxed);
     }
+
+    async fn update_stats(disp: &mut Display<'_>, ticket_count: u16, now: DateTime<FixedOffset>) {}
 }
