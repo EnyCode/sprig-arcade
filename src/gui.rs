@@ -53,11 +53,12 @@ pub const PROGRESS_BLUE: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
     .build();
 
 pub const PROGRESS_ORANGE: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
-    .fill_color(Rgb565::new(32, 23, 0))
+    .fill_color(Rgb565::new(31, 23, 0))
     .build();
 
 pub mod nav {
     use embedded_graphics::{image::Image, pixelcolor::Rgb565, Drawable};
+    use log::info;
     use tinytga::Tga;
 
     use crate::{Display, NavButton, ACTIVE_BTN, BTN, SELECTED_BTN};
@@ -108,26 +109,28 @@ pub mod nav {
 }
 
 pub mod home {
-    use core::{cmp::max, f32::consts::PI, sync::atomic::AtomicBool};
+    use core::{f32::consts::PI, sync::atomic::AtomicBool};
 
     use chrono::{DateTime, FixedOffset, TimeZone};
     use core::fmt::Write;
-    use embassy_rp::pac::common::W;
-    use embassy_rp::peripherals::RTC;
     use embassy_time::Timer;
+    use embedded_graphics::draw_target::DrawTarget;
     use embedded_graphics::{
         geometry::{Point, Size},
         image::Image,
+        pixelcolor::Rgb565,
         primitives::{Primitive, Rectangle, RoundedRectangle},
         text::Text,
         Drawable,
     };
+    use embedded_graphics_framebuf::FrameBuf;
     use heapless::String;
     use log::info;
     use micromath::F32Ext;
     use tinytga::Tga;
 
     use super::{CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE, PROGRESS_ORANGE};
+    use crate::gui::{BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
     use crate::{Display, END_DATE, TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET};
 
     pub async fn init(disp: &mut Display<'_>) {
@@ -143,14 +146,6 @@ pub mod home {
     ) {
         info!("[GUI] updating gui");
         Timer::after_nanos(200000).await;
-
-        RoundedRectangle::with_equal_corners(
-            Rectangle::new(Point::new(20, 53), Size::new(120, 6)),
-            Size::new(2, 2),
-        )
-        .into_styled(PROGRESS_BG)
-        .draw(disp)
-        .unwrap();
 
         let mut count = String::<4>::new();
         write!(count, "{} ", ticket_count - TICKET_OFFSET).unwrap();
@@ -211,60 +206,100 @@ pub mod home {
         let prev = old as f32 / TICKET_GOAL as f32;
         let change = (ticket_count - old) as f32 / TICKET_GOAL as f32;
 
-        if prev + change < ideal_percent {
-            draw_ideal(ideal_percent, disp).await;
-        }
+        static DRAWN: AtomicBool = AtomicBool::new(false);
+        let mut data = [Rgb565::new(31, 60, 27); 120 * 6];
+        let mut fbuf = FrameBuf::new(&mut data, 120, 6);
 
-        draw_progress(change, prev, disp).await;
-        if prev + change > ideal_percent {
-            draw_ideal(ideal_percent, disp).await;
-        }
-    }
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(0, 0), Size::new(120, 6)),
+            Size::new(2, 2),
+        )
+        .into_styled(PROGRESS_BG)
+        .draw(&mut fbuf)
+        .unwrap();
 
-    async fn draw_progress(change: f32, prev: f32, disp: &mut Display<'_>) {
         for i in 0..30 {
             let mul = -((PI * (i as f32 / 30.)).cos() - 1.) / 2.;
 
-            info!("width: {:?}", (120. * ((change * mul) + prev)) as u32);
+            if !DRAWN.load(core::sync::atomic::Ordering::Relaxed) && ideal_percent >= change + prev
+            {
+                RoundedRectangle::with_equal_corners(
+                    Rectangle::new(
+                        Point::new(0, 0),
+                        Size::new((120. * (ideal_percent * mul)) as u32, 6),
+                    ),
+                    Size::new(2, 2),
+                )
+                .into_styled(PROGRESS_ORANGE)
+                .draw(&mut fbuf)
+                .unwrap();
+            }
 
             RoundedRectangle::with_equal_corners(
                 Rectangle::new(
-                    Point::new(20, 53),
+                    Point::new(0, 0),
                     Size::new((120. * ((change * mul) + prev)) as u32, 6),
                 ),
                 Size::new(2, 2),
             )
             .into_styled(PROGRESS_BLUE)
-            .draw(disp)
+            .draw(&mut fbuf)
             .unwrap();
+
+            if !DRAWN.load(core::sync::atomic::Ordering::Relaxed) && ideal_percent < change + prev {
+                RoundedRectangle::with_equal_corners(
+                    Rectangle::new(
+                        Point::new(0, 0),
+                        Size::new((120. * (ideal_percent * mul)) as u32, 6),
+                    ),
+                    Size::new(2, 2),
+                )
+                .into_styled(PROGRESS_ORANGE)
+                .draw(&mut fbuf)
+                .unwrap();
+            }
+
+            let area = Rectangle::new(Point::new(20, 53), fbuf.size());
+
+            disp.fill_contiguous(&area, *fbuf.data).unwrap();
 
             Timer::after_millis(33).await;
         }
-    }
 
-    async fn draw_ideal(percent: f32, disp: &mut Display<'_>) {
-        static DRAWN: AtomicBool = AtomicBool::new(false);
-
-        if DRAWN.load(core::sync::atomic::Ordering::Relaxed) {
-            return;
-        }
         DRAWN.store(true, core::sync::atomic::Ordering::Relaxed);
 
-        for i in 0..30 {
-            let mul = -((PI * (i as f32 / 30.)).cos() - 1.) / 2.;
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(20, 62), Size::new(6, 6)),
+            Size::new(2, 2),
+        )
+        .into_styled(PROGRESS_BLUE)
+        .draw(disp)
+        .unwrap();
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(20, 71), Size::new(6, 6)),
+            Size::new(2, 2),
+        )
+        .into_styled(PROGRESS_ORANGE)
+        .draw(disp)
+        .unwrap();
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(20, 80), Size::new(6, 6)),
+            Size::new(2, 2),
+        )
+        .into_styled(PROGRESS_BG)
+        .draw(disp)
+        .unwrap();
 
-            RoundedRectangle::with_equal_corners(
-                Rectangle::new(
-                    Point::new(20, 53),
-                    Size::new((120. * (percent * mul)) as u32, 6),
-                ),
-                Size::new(2, 2),
-            )
-            .into_styled(PROGRESS_ORANGE)
+        Text::new("82% there!", Point::new(28, 62), BLACK_CHAR)
             .draw(disp)
             .unwrap();
 
-            Timer::after_millis(33).await;
-        }
+        Text::new("Should be 46% (74 ) done!", Point::new(28, 71), BLACK_CHAR)
+            .draw(disp)
+            .unwrap();
+
+        Text::new("18% left (29 )!", Point::new(28, 80), BLACK_CHAR)
+            .draw(disp)
+            .unwrap();
     }
 }

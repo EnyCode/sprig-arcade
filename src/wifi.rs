@@ -265,13 +265,19 @@ pub async fn setup(
 pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
     loop {
         debug!("[Wifi] Fetching Hack Hour stats");
-        Timer::after_nanos(20000).await;
+        Timer::after_nanos(200000).await;
         static TICKET_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
         let rx_buffer = TICKET_BUF.init([0; 8192]);
+
+        debug!("got rx buffer");
+        Timer::after_nanos(200000).await;
 
         let client_state = TcpClientState::<1, 1024, 1024>::new();
         let tcp_client = TcpClient::new(stack, &client_state);
         let dns_client = DnsSocket::new(stack);
+
+        debug!("got some states");
+        Timer::after_nanos(200000).await;
 
         // TODO: use tls
         /*let tls_config = TlsConfig::new(
@@ -282,6 +288,8 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
         );*/
 
         let mut http_client = HttpClient::new(&tcp_client, &dns_client);
+
+        debug!("got client");
 
         let mut url = String::<50>::new();
         url.push_str("http://hackhour.hackclub.com/api/stats/")
@@ -380,6 +388,7 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
             .await;
 
         debug!("[Wifi] Sent event successfully!");
-        Timer::after_secs(60 * 5).await;
+        Timer::after_secs(20).await;
+        debug!("[Wifi] Starting again!");
     }
 }
