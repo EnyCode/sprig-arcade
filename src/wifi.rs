@@ -29,7 +29,7 @@ use embedded_graphics::{
     Drawable,
 };
 use heapless::String;
-use log::{error, info};
+use log::{debug, error, info};
 use rand::RngCore;
 use reqwless::{
     client::{HttpClient, TlsConfig, TlsVerify},
@@ -264,6 +264,8 @@ pub async fn setup(
 #[embassy_executor::task]
 pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
     loop {
+        debug!("[Wifi] Fetching Hack Hour stats");
+        Timer::after_nanos(20000).await;
         static TICKET_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
         let rx_buffer = TICKET_BUF.init([0; 8192]);
 
@@ -376,6 +378,8 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
                 },
             ))
             .await;
+
+        debug!("[Wifi] Sent event successfully!");
         Timer::after_secs(60 * 5).await;
     }
 }

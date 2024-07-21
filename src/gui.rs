@@ -108,9 +108,9 @@ pub mod nav {
 }
 
 pub mod home {
-    use core::{cmp::max, f32::consts::PI};
+    use core::{cmp::max, f32::consts::PI, sync::atomic::AtomicBool};
 
-    use chrono::{DateTime, FixedOffset};
+    use chrono::{DateTime, FixedOffset, TimeZone};
     use core::fmt::Write;
     use embassy_rp::pac::common::W;
     use embassy_rp::peripherals::RTC;
@@ -127,7 +127,7 @@ pub mod home {
     use micromath::F32Ext;
     use tinytga::Tga;
 
-    use super::{CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE};
+    use super::{CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE, PROGRESS_ORANGE};
     use crate::{Display, END_DATE, TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET};
 
     pub async fn init(disp: &mut Display<'_>) {
@@ -141,7 +141,7 @@ pub mod home {
         old_count: u16,
         now: DateTime<FixedOffset>,
     ) {
-        info!("updating gui");
+        info!("[GUI] updating gui");
         Timer::after_nanos(200000).await;
 
         RoundedRectangle::with_equal_corners(
@@ -174,9 +174,30 @@ pub mod home {
 
         info!("checking days left");
         Timer::after_nanos(200000).await;
+        let end = FixedOffset::east_opt(14400)
+            .unwrap()
+            .timestamp_opt(1725163199, 0)
+            .unwrap();
+        let start = FixedOffset::east_opt(14400)
+            .unwrap()
+            .timestamp_opt(1718668800, 0)
+            .unwrap();
 
-        let days_left = END_DATE.lock().await.unwrap() - now;
-        info!("days left: {:?}", days_left.num_days());
+        let days_left = end - now;
+        let passed_days = now - start;
+        info!(
+            "We are {:?} days into Arcade out of {:?} days",
+            passed_days.num_days(),
+            (end - start).num_days()
+        );
+        let ideal_percent =
+            (passed_days.num_days() as f32 + 1.0) / ((end - start).num_days() as f32 - 1.0);
+        info!(
+            "The ideal percentage is {:?} with {:?} tickets",
+            ideal_percent,
+            ideal_percent * TICKET_GOAL as f32
+        );
+        //let ideal_tickets = TICKET_GOAL as f32 / days_left.num_days() as f32;
 
         let old = old_count
             - if TICKET_OFFSET > old_count {
@@ -189,6 +210,18 @@ pub mod home {
         // TODO: expected progress
         let prev = old as f32 / TICKET_GOAL as f32;
         let change = (ticket_count - old) as f32 / TICKET_GOAL as f32;
+
+        if prev + change < ideal_percent {
+            draw_ideal(ideal_percent, disp).await;
+        }
+
+        draw_progress(change, prev, disp).await;
+        if prev + change > ideal_percent {
+            draw_ideal(ideal_percent, disp).await;
+        }
+    }
+
+    async fn draw_progress(change: f32, prev: f32, disp: &mut Display<'_>) {
         for i in 0..30 {
             let mul = -((PI * (i as f32 / 30.)).cos() - 1.) / 2.;
 
@@ -202,6 +235,32 @@ pub mod home {
                 Size::new(2, 2),
             )
             .into_styled(PROGRESS_BLUE)
+            .draw(disp)
+            .unwrap();
+
+            Timer::after_millis(33).await;
+        }
+    }
+
+    async fn draw_ideal(percent: f32, disp: &mut Display<'_>) {
+        static DRAWN: AtomicBool = AtomicBool::new(false);
+
+        if DRAWN.load(core::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        DRAWN.store(true, core::sync::atomic::Ordering::Relaxed);
+
+        for i in 0..30 {
+            let mul = -((PI * (i as f32 / 30.)).cos() - 1.) / 2.;
+
+            RoundedRectangle::with_equal_corners(
+                Rectangle::new(
+                    Point::new(20, 53),
+                    Size::new((120. * (percent * mul)) as u32, 6),
+                ),
+                Size::new(2, 2),
+            )
+            .into_styled(PROGRESS_ORANGE)
             .draw(disp)
             .unwrap();
 

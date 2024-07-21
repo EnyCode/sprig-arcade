@@ -40,10 +40,10 @@ use embedded_graphics::Drawable;
 use gui::home;
 use gui::nav::{update_active, update_selected};
 use log::info;
-use panic_probe as _;
 use st7735_lcd::{Orientation, ST7735};
 use static_cell::StaticCell;
 use tinytga::Tga;
+use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
@@ -57,7 +57,8 @@ mod wifi;
 pub const TICKET_GOAL: u16 = 160;
 pub const TICKET_OFFSET: u16 = 16;
 pub const TICKETS: AtomicU16 = AtomicU16::new(0);
-pub const END_DATE: Mutex<NoopRawMutex, Option<DateTime<FixedOffset>>> = Mutex::new(None);
+pub const END_DATE: Mutex<CriticalSectionRawMutex, Option<DateTime<FixedOffset>>> =
+    Mutex::new(None);
 
 // we import everything here to avoid repeats and for ease of use
 // makes it easier to eventually move to a fixed memory location if their all together (probably)
@@ -93,7 +94,7 @@ static EVENTS: Channel<ThreadModeRawMutex, Events, 8> = Channel::new();
 
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
-    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+    embassy_usb_logger::run!(1024, log::LevelFilter::Debug, driver);
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -269,15 +270,6 @@ impl NavButton {
 // TODO: get
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
-    {
-        *(END_DATE.lock().await) = Some(
-            FixedOffset::east_opt(14400)
-                .unwrap()
-                .timestamp_opt(1725163199, 0)
-                .unwrap(),
-        );
-    }
-
     let p = embassy_rp::init(Default::default());
     let driver = Driver::new(p.USB, Irqs);
     spawner.spawn(logger_task(driver)).unwrap();
@@ -290,7 +282,7 @@ async fn main(spawner: Spawner) -> ! {
     // TODO: remove logging wait thing, dont know why its needed but it works
     Timer::after_nanos(20000).await;
 
-    defmt::info!("Hello, world!");
+    info!("Hello, world!");
 
     let clk = p.PIN_18;
     let mosi = p.PIN_19;
