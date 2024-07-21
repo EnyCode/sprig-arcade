@@ -277,6 +277,7 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
     loop {
         unsafe {
             let rx_buffer = &mut RX_BUF;
+            rx_buffer.fill(0);
             debug!("[Wifi] Fetching Hack Hour stats");
             Timer::after_nanos(200000).await;
 

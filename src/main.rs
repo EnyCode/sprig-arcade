@@ -5,7 +5,7 @@
 use core::any::Any;
 use core::cell::RefCell;
 use core::future::IntoFuture;
-use core::sync::atomic::AtomicU16;
+use core::sync::atomic::{AtomicU16, Ordering};
 
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use cyw43_pio::PioSpi;
@@ -56,7 +56,7 @@ mod wifi;
 // TODO: move everything to settings
 pub const TICKET_GOAL: u16 = 160;
 pub const TICKET_OFFSET: u16 = 16;
-pub const TICKETS: AtomicU16 = AtomicU16::new(0);
+pub static TICKETS: AtomicU16 = AtomicU16::new(0);
 pub const END_DATE: Mutex<CriticalSectionRawMutex, Option<DateTime<FixedOffset>>> =
     Mutex::new(None);
 
@@ -76,7 +76,8 @@ const WISHLIST_ICON: &'static [u8; 218] = include_bytes!("../assets/buttons/wish
 const SHOP_ICON: &'static [u8; 204] = include_bytes!("../assets/buttons/shop.tga");
 const ERRORS_ICON: &'static [u8; 212] = include_bytes!("../assets/buttons/errors.tga");
 
-const TICKET_LARGE: &'static [u8; 516] = include_bytes!("../assets/ticket_large.tga");
+const TICKET_LARGE: &'static [u8; 471] = include_bytes!("../assets/ticket_large.tga");
+const TICKET_SMALL: &'static [u8; 187] = include_bytes!("../assets/ticket_small.tga");
 
 type Display<'a> = ST7735<
     SpiDeviceWithConfig<
@@ -383,9 +384,9 @@ async fn main(spawner: Spawner) -> ! {
             }
             Events::TicketCountUpdated(tickets, now) => {
                 info!("got the event!");
-                let old = TICKETS.load(core::sync::atomic::Ordering::Relaxed);
-                TICKETS.store(tickets, core::sync::atomic::Ordering::Relaxed);
-                info!("tickets {}, used to have {}", tickets, old);
+                let old = TICKETS.load(Ordering::Relaxed);
+                TICKETS.store(tickets, Ordering::Relaxed);
+                info!("tickets {}, used to have {}", tickets, old,);
 
                 home::update_progress(&mut disp, tickets as u16, old, now).await;
             }

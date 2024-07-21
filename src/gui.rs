@@ -131,7 +131,7 @@ pub mod home {
 
     use super::{CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE, PROGRESS_ORANGE};
     use crate::gui::{BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
-    use crate::{Display, END_DATE, TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET};
+    use crate::{Display, END_DATE, TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET, TICKET_SMALL};
 
     pub async fn init(disp: &mut Display<'_>) {
         // NOTE FOR SELF: by this point the display has been cleared
@@ -158,7 +158,7 @@ pub mod home {
         let img = match Tga::from_slice(TICKET_LARGE) {
             Ok(img) => img,
             Err(err) => {
-                info!("errored with {:?}", err);
+                info!("ticket large errored with {:?}", err);
                 return;
             }
         };
@@ -200,6 +200,51 @@ pub mod home {
             } else {
                 TICKET_OFFSET
             };
+
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(20, 62), Size::new(6, 6)),
+            Size::new(2, 2),
+        )
+        .into_styled(PROGRESS_BLUE)
+        .draw(disp)
+        .unwrap();
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(20, 71), Size::new(6, 6)),
+            Size::new(2, 2),
+        )
+        .into_styled(PROGRESS_ORANGE)
+        .draw(disp)
+        .unwrap();
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(20, 80), Size::new(6, 6)),
+            Size::new(2, 2),
+        )
+        .into_styled(PROGRESS_BG)
+        .draw(disp)
+        .unwrap();
+
+        Text::new("82% there!", Point::new(28, 62), BLACK_CHAR)
+            .draw(disp)
+            .unwrap();
+
+        Text::new("Should be 46% (74  ) done!", Point::new(28, 71), BLACK_CHAR)
+            .draw(disp)
+            .unwrap();
+
+        Text::new("18% left (29  )!", Point::new(28, 80), BLACK_CHAR)
+            .draw(disp)
+            .unwrap();
+
+        let img = match Tga::from_slice(TICKET_SMALL) {
+            Ok(img) => img,
+            Err(err) => {
+                info!("ticket small errored with {:?}", err);
+                return;
+            }
+        };
+
+        Image::new(&img, Point::new(96, 70)).draw(disp).unwrap();
+        Image::new(&img, Point::new(76, 79)).draw(disp).unwrap();
 
         // 1 second long animation
         // TODO: expected progress
@@ -257,6 +302,17 @@ pub mod home {
                 .into_styled(PROGRESS_ORANGE)
                 .draw(&mut fbuf)
                 .unwrap();
+            } else if ideal_percent < change + prev {
+                RoundedRectangle::with_equal_corners(
+                    Rectangle::new(
+                        Point::new(0, 0),
+                        Size::new((120. * ideal_percent) as u32, 6),
+                    ),
+                    Size::new(2, 2),
+                )
+                .into_styled(PROGRESS_BG)
+                .draw(&mut fbuf)
+                .unwrap();
             }
 
             let area = Rectangle::new(Point::new(20, 53), fbuf.size());
@@ -267,39 +323,5 @@ pub mod home {
         }
 
         DRAWN.store(true, core::sync::atomic::Ordering::Relaxed);
-
-        RoundedRectangle::with_equal_corners(
-            Rectangle::new(Point::new(20, 62), Size::new(6, 6)),
-            Size::new(2, 2),
-        )
-        .into_styled(PROGRESS_BLUE)
-        .draw(disp)
-        .unwrap();
-        RoundedRectangle::with_equal_corners(
-            Rectangle::new(Point::new(20, 71), Size::new(6, 6)),
-            Size::new(2, 2),
-        )
-        .into_styled(PROGRESS_ORANGE)
-        .draw(disp)
-        .unwrap();
-        RoundedRectangle::with_equal_corners(
-            Rectangle::new(Point::new(20, 80), Size::new(6, 6)),
-            Size::new(2, 2),
-        )
-        .into_styled(PROGRESS_BG)
-        .draw(disp)
-        .unwrap();
-
-        Text::new("82% there!", Point::new(28, 62), BLACK_CHAR)
-            .draw(disp)
-            .unwrap();
-
-        Text::new("Should be 46% (74 ) done!", Point::new(28, 71), BLACK_CHAR)
-            .draw(disp)
-            .unwrap();
-
-        Text::new("18% left (29 )!", Point::new(28, 80), BLACK_CHAR)
-            .draw(disp)
-            .unwrap();
     }
 }
