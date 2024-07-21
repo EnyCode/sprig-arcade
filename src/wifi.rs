@@ -16,6 +16,10 @@ use embassy_rp::{
     pio::Pio,
     Peripherals,
 };
+use embassy_sync::{
+    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
+    mutex::Mutex,
+};
 use embassy_time::Timer;
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::{
@@ -51,7 +55,7 @@ pub struct StatsResponse {
     error: Option<&'static str>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct StatsData {
     pub sessions: u32,
     pub total: u32,
@@ -263,132 +267,155 @@ pub async fn setup(
 
 #[embassy_executor::task]
 pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
+    let client_state = TcpClientState::<1, 1024, 1024>::new();
+    let tcp_client = TcpClient::new(stack, &client_state);
+    let dns_client = DnsSocket::new(stack);
+
+    let mut http_client = HttpClient::new(&tcp_client, &dns_client);
+    static mut RX_BUF: [u8; 8192] = [0; 8192];
+
     loop {
-        debug!("[Wifi] Fetching Hack Hour stats");
-        Timer::after_nanos(200000).await;
-        static TICKET_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
-        let rx_buffer = TICKET_BUF.init([0; 8192]);
+        unsafe {
+            let rx_buffer = &mut RX_BUF;
+            debug!("[Wifi] Fetching Hack Hour stats");
+            Timer::after_nanos(200000).await;
 
-        debug!("got rx buffer");
-        Timer::after_nanos(200000).await;
+            // TODO: use tls
+            /*let tls_config = TlsConfig::new(
+                seed,
+                &mut tls_read_buffer,
+                &mut tls_write_buffer,
+                TlsVerify::None,
+            );*/
 
-        let client_state = TcpClientState::<1, 1024, 1024>::new();
-        let tcp_client = TcpClient::new(stack, &client_state);
-        let dns_client = DnsSocket::new(stack);
+            debug!("got client");
 
-        debug!("got some states");
-        Timer::after_nanos(200000).await;
+            let mut tickets = 0;
+            {
+                let mut url = String::<50>::new();
+                url.push_str("http://hackhour.hackclub.com/api/stats/")
+                    .unwrap();
+                url.push_str(env!("SLACK_ID")).unwrap();
 
-        // TODO: use tls
-        /*let tls_config = TlsConfig::new(
-            seed,
-            &mut tls_read_buffer,
-            &mut tls_write_buffer,
-            TlsVerify::None,
-        );*/
+                debug!("making request");
+                Timer::after_nanos(200000).await;
 
-        let mut http_client = HttpClient::new(&tcp_client, &dns_client);
+                let mut req = http_client
+                    .request(reqwless::request::Method::GET, &url)
+                    .await
+                    .unwrap();
 
-        debug!("got client");
+                let mut header = String::<46>::from_str("Bearer ").unwrap();
+                header.push_str(env!("API_TOKEN")).unwrap();
+                let headers = [("Authorization", header.as_str())];
 
-        let mut url = String::<50>::new();
-        url.push_str("http://hackhour.hackclub.com/api/stats/")
-            .unwrap();
-        url.push_str(env!("SLACK_ID")).unwrap();
+                req = req.headers(&headers);
 
-        let mut req = http_client
-            .request(reqwless::request::Method::GET, &url)
-            .await
-            .unwrap();
+                debug!("got headers");
+                Timer::after_nanos(200000).await;
 
-        let mut header = String::<46>::from_str("Bearer ").unwrap();
-        header.push_str(env!("API_TOKEN")).unwrap();
-        let headers = [("Authorization", header.as_str())];
+                let resp = req
+                    .send(rx_buffer)
+                    .await
+                    .unwrap()
+                    .body()
+                    .read_to_end()
+                    .await
+                    .unwrap();
 
-        req = req.headers(&headers);
+                debug!("sent request {:?}", from_utf8(resp));
+                Timer::after_nanos(200000).await;
 
-        let resp = req
-            .send(rx_buffer)
-            .await
-            .unwrap()
-            .body()
-            .read_to_end()
-            .await
-            .unwrap();
-
-        let body: StatsResponse = match serde_json_core::from_slice(resp) {
-            Ok(b) => b.0,
-            Err(e) => {
-                error!("[Wifi] Failed to parse the Hack Hour response. Is it down?",);
-                error!(
-                    "[Wifi] Recieved response `{:?}` and failed with error `{:?}",
-                    from_utf8(resp),
-                    e
-                );
-                return;
-            }
-        };
-
-        if !body.ok {
-            error!("[Wifi] Hack Hour response failed. Are you authenticated properly?");
-            error!("[Wifi] Error is `{}`", body.error.unwrap());
-            return;
-        }
-        let tickets = body.data.unwrap().sessions as u16;
-
-        let client_state = TcpClientState::<1, 1024, 1024>::new();
-        let tcp_client = TcpClient::new(stack, &client_state);
-
-        let mut http_client = HttpClient::new(&tcp_client, &dns_client);
-
-        let mut req = http_client
-            .request(
-                reqwless::request::Method::GET,
-                "http://worldtimeapi.org/api/timezone/US/Eastern",
-            )
-            .await
-            .unwrap();
-
-        static TIME_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
-        let rx_buffer = TIME_BUF.init([0; 8192]);
-
-        let resp = req
-            .send(rx_buffer)
-            .await
-            .unwrap()
-            .body()
-            .read_to_end()
-            .await
-            .unwrap();
-
-        let body: TimeData = match serde_json_core::from_slice(resp) {
-            Ok(b) => b.0,
-            Err(e) => {
-                error!("[Wifi] Failed to parse time response. ");
-                error!(
-                    "[Wifi] Recieved response `{:?}` and failed with error `{:?}`",
-                    from_utf8(resp),
-                    e
-                );
-                return;
-            }
-        };
-
-        EVENTS
-            .send(crate::Events::TicketCountUpdated(
-                tickets,
-                match DateTime::parse_from_rfc3339(body.datetime) {
-                    Ok(dt) => dt,
+                let body: StatsResponse = match serde_json_core::from_slice(resp) {
+                    Ok(b) => b.0,
                     Err(e) => {
-                        error!("[Wifi] Failed to parse datetime `{:?}`", e);
+                        error!("[Wifi] Failed to parse the Hack Hour response. Is it down?",);
+                        error!(
+                            "[Wifi] Recieved response `{:?}` and failed with error `{:?}",
+                            "d", e
+                        );
                         return;
                     }
-                },
-            ))
-            .await;
+                };
 
-        debug!("[Wifi] Sent event successfully!");
-        Timer::after_secs(20).await;
-        debug!("[Wifi] Starting again!");
+                if !body.ok {
+                    error!("[Wifi] Hack Hour response failed. Are you authenticated properly?");
+                    error!("[Wifi] Error is `{}`", body.error.unwrap());
+                    return;
+                }
+                tickets = body.data.clone().unwrap().sessions as u16;
+            }
+
+            debug!("got tickets");
+            Timer::after_nanos(200000).await;
+            debug!("making request");
+            Timer::after_nanos(200000).await;
+
+            let mut req = match http_client
+                .request(
+                    reqwless::request::Method::GET,
+                    "http://worldtimeapi.org/api/timezone/US/Eastern",
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("[Wifi] Failed to make time request. ");
+                    error!("[Wifi] Error is `{:?}`", e);
+                    Timer::after_nanos(4000000).await;
+                    return;
+                }
+            };
+
+            debug!("made request");
+            Timer::after_nanos(200000).await;
+
+            let rx_buffer = &mut RX_BUF;
+            rx_buffer.fill(0);
+
+            let resp = req
+                .send(rx_buffer)
+                .await
+                .unwrap()
+                .body()
+                .read_to_end()
+                .await
+                .unwrap();
+
+            debug!("sent request");
+            Timer::after_nanos(200000).await;
+
+            let body: TimeData = match serde_json_core::from_slice(resp) {
+                Ok(b) => b.0,
+                Err(e) => {
+                    error!("[Wifi] Failed to parse time response. ");
+                    error!(
+                        "[Wifi] Recieved response `{:?}` and failed with error `{:?}`",
+                        "d", e
+                    );
+                    return;
+                }
+            };
+
+            debug!("parsed data");
+            Timer::after_nanos(200000).await;
+
+            EVENTS
+                .send(crate::Events::TicketCountUpdated(
+                    tickets,
+                    match DateTime::parse_from_rfc3339(body.datetime) {
+                        Ok(dt) => dt,
+                        Err(e) => {
+                            error!("[Wifi] Failed to parse datetime `{:?}`", e);
+                            return;
+                        }
+                    },
+                ))
+                .await;
+
+            debug!("[Wifi] Sent event successfully!");
+            Timer::after_secs(60 * 5).await;
+            debug!("[Wifi] Starting again!");
+        }
     }
 }
