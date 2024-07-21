@@ -110,6 +110,7 @@ pub mod nav {
 pub mod home {
     use core::{cmp::max, f32::consts::PI};
 
+    use chrono::{DateTime, FixedOffset};
     use core::fmt::Write;
     use embassy_rp::pac::common::W;
     use embassy_rp::peripherals::RTC;
@@ -127,14 +128,22 @@ pub mod home {
     use tinytga::Tga;
 
     use super::{CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE};
-    use crate::{Display, TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET};
+    use crate::{Display, END_DATE, TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET};
 
     pub async fn init(disp: &mut Display<'_>) {
         // NOTE FOR SELF: by this point the display has been cleared
         // TODO: move arcade logo drawing to here
     }
 
-    pub async fn update_progress(disp: &mut Display<'_>, ticket_count: u16, old_count: u16) {
+    pub async fn update_progress(
+        disp: &mut Display<'_>,
+        ticket_count: u16,
+        old_count: u16,
+        now: DateTime<FixedOffset>,
+    ) {
+        info!("updating gui");
+        Timer::after_nanos(200000).await;
+
         RoundedRectangle::with_equal_corners(
             Rectangle::new(Point::new(20, 53), Size::new(120, 6)),
             Size::new(2, 2),
@@ -163,7 +172,11 @@ pub mod home {
             .draw(disp)
             .unwrap();
 
-        //let days_left = ;
+        info!("checking days left");
+        Timer::after_nanos(200000).await;
+
+        let days_left = END_DATE.lock().await.unwrap() - now;
+        info!("days left: {:?}", days_left.num_days());
 
         let old = old_count
             - if TICKET_OFFSET > old_count {

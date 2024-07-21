@@ -17,11 +17,12 @@ use embassy_net::Stack;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output};
 use embassy_rp::peripherals::{
-    self, DMA_CH0, PIN_14, PIN_15, PIN_23, PIN_25, PIN_6, PIN_8, PIO0, USB,
+    self, DMA_CH0, PIN_14, PIN_15, PIN_23, PIN_25, PIN_6, PIN_8, PIO0, UART0, USB,
 };
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi::{self, Spi};
 use embassy_rp::spi::{Blocking, Phase, Polarity};
+use embassy_rp::uart::Uart;
 use embassy_rp::usb::{self, Driver};
 use embassy_sync::blocking_mutex::raw::{
     CriticalSectionRawMutex, NoopRawMutex, ThreadModeRawMutex,
@@ -38,11 +39,11 @@ use embedded_graphics::primitives::{Primitive, PrimitiveStyle, Rectangle};
 use embedded_graphics::Drawable;
 use gui::home;
 use gui::nav::{update_active, update_selected};
-use heapless::Vec;
 use log::info;
+use panic_probe as _;
 use st7735_lcd::{Orientation, ST7735};
+use static_cell::StaticCell;
 use tinytga::Tga;
-use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
@@ -108,7 +109,7 @@ pub enum Button {
 pub enum Events {
     ButtonPressed(Button),
     ButtonReleased(Button),
-    TicketCountUpdated(u16),
+    TicketCountUpdated(u16, DateTime<FixedOffset>),
     Placeholder,
 }
 
@@ -265,6 +266,7 @@ impl NavButton {
     }
 }
 
+// TODO: get
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
     {
@@ -287,6 +289,8 @@ async fn main(spawner: Spawner) -> ! {
     info!("Launched Arcade Sprig!");
     // TODO: remove logging wait thing, dont know why its needed but it works
     Timer::after_nanos(20000).await;
+
+    defmt::info!("Hello, world!");
 
     let clk = p.PIN_18;
     let mosi = p.PIN_19;
@@ -385,13 +389,13 @@ async fn main(spawner: Spawner) -> ! {
                 info!("released {:?}", button);
                 info!("------------------");
             }
-            Events::TicketCountUpdated(tickets) => {
+            Events::TicketCountUpdated(tickets, now) => {
                 info!("got the event!");
                 let old = TICKETS.load(core::sync::atomic::Ordering::Relaxed);
                 TICKETS.store(tickets, core::sync::atomic::Ordering::Relaxed);
                 info!("tickets {}, used to have {}", tickets, old);
 
-                home::update_progress(&mut disp, tickets as u16, old).await;
+                home::update_progress(&mut disp, tickets as u16, old, now).await;
             }
             _ => {}
         }
