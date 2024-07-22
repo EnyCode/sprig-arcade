@@ -28,8 +28,8 @@ const PICO_FONT: MonoFont = MonoFont {
 };
 
 const NUMBER_FONT: MonoFont = MonoFont {
-    image: ImageRaw::new(include_bytes!("../assets/numbers.raw"), 96),
-    glyph_mapping: &StrGlyphMapping::new("0123456789. ", 0),
+    image: ImageRaw::new(include_bytes!("../assets/numbers.raw"), 104),
+    glyph_mapping: &StrGlyphMapping::new("0123456789. :", 0),
     character_size: Size::new(8, 10),
     character_spacing: 0,
     baseline: 0,
@@ -48,6 +48,10 @@ pub const STAT_ONE_CHAR: MonoTextStyle<Rgb565> =
 // stat two is just number char
 pub const STAT_THREE_CHAR: MonoTextStyle<Rgb565> =
     MonoTextStyle::new(&NUMBER_FONT, Rgb565::new(25, 27, 28));
+
+// TODO: change to not solid black
+pub const BLACK_NUMBER_CHAR: MonoTextStyle<Rgb565> =
+    MonoTextStyle::new(&NUMBER_FONT, Rgb565::BLACK);
 
 pub const BLACK_CHAR: MonoTextStyle<Rgb565> = MonoTextStyle::new(&PICO_FONT, Rgb565::BLACK);
 pub const NORMAL_TEXT: TextStyle = TextStyleBuilder::new()
@@ -602,11 +606,29 @@ pub mod home {
 
 pub mod session {
     use chrono::{DateTime, FixedOffset};
+    use embedded_graphics::{geometry::Point, image::Image, text::Text, Drawable};
     use log::info;
+    use tinytga::Tga;
 
-    use crate::{wifi::RequestData, Display};
+    use crate::{
+        gui::{BLACK_NUMBER_CHAR, CENTERED_TEXT},
+        wifi::RequestData,
+        Display, PROGRESS_BAR,
+    };
 
     pub async fn update(disp: &mut Display<'_>, data: RequestData, now: DateTime<FixedOffset>) {
         info!("got data from session {:?}", data);
+        Image::new(&Tga::from_slice(PROGRESS_BAR).unwrap(), Point::new(20, 53))
+            .draw(disp)
+            .unwrap();
+
+        Text::with_text_style(
+            "0:27  ",
+            Point::new(80, 40),
+            BLACK_NUMBER_CHAR,
+            CENTERED_TEXT,
+        )
+        .draw(disp)
+        .unwrap();
     }
 }

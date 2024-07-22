@@ -106,6 +106,8 @@ const ERRORS_ICON: &'static [u8; 212] = include_bytes!("../assets/buttons/errors
 const TICKET_LARGE: &'static [u8; 471] = include_bytes!("../assets/ticket_large.tga");
 const TICKET_SMALL: &'static [u8; 187] = include_bytes!("../assets/ticket_small.tga");
 
+const PROGRESS_BAR: &'static [u8; 1033] = include_bytes!("../assets/session/progress.tga");
+
 // TODO: if there is more side bars then move to similar system as top nav
 const PROGRESS_SELECTED: &'static [u8; 710] =
     include_bytes!("../assets/home/progress_selected.tga");

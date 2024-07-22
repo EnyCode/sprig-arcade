@@ -80,6 +80,7 @@ pub struct StatsData {
 
 #[derive(Deserialize, Debug)]
 pub struct TimeData {
+    #[serde(rename = "dateTime")]
     pub datetime: &'static str,
 }
 
@@ -313,7 +314,19 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
     let tcp_client = TcpClient::new(stack, &client_state);
     let dns_client = DnsSocket::new(stack);
 
-    let mut http_client = HttpClient::new(&tcp_client, &dns_client);
+    let seed = RoscRng.next_u64();
+
+    let mut tls_read_buffer = [0; 16640];
+    let mut tls_write_buffer = [0; 16640];
+
+    let tls_config = TlsConfig::new(
+        seed,
+        &mut tls_read_buffer,
+        &mut tls_write_buffer,
+        TlsVerify::None,
+    );
+
+    let mut http_client = HttpClient::new_with_tls(&tcp_client, &dns_client, tls_config);
     static mut RX_BUF: [u8; 8192] = [0; 8192];
 
     loop {
@@ -324,12 +337,6 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
             Timer::after_nanos(200000).await;
 
             // TODO: use tls
-            /*let tls_config = TlsConfig::new(
-                seed,
-                &mut tls_read_buffer,
-                &mut tls_write_buffer,
-                TlsVerify::None,
-            );*/
 
             debug!("got client");
             Timer::after_nanos(200000).await;
@@ -443,7 +450,7 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
             let mut req = match http_client
                 .request(
                     reqwless::request::Method::GET,
-                    "http://worldtimeapi.org/api/timezone/US/Eastern",
+                    "https://www.timeapi.io/api/Time/current/zone?timeZone=US/Eastern",
                 )
                 .await
             {
