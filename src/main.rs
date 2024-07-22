@@ -81,7 +81,7 @@ macro_rules! check {
 
 // TODO: move everything to settings
 pub const TICKET_GOAL: u16 = 160;
-pub const TICKET_OFFSET: u16 = 15;
+pub const TICKET_OFFSET: u16 = 14;
 pub static TICKETS: AtomicU16 = AtomicU16::new(0);
 pub const END_DATE: Mutex<CriticalSectionRawMutex, Option<DateTime<FixedOffset>>> =
     Mutex::new(None);

@@ -22,8 +22,8 @@ const PICO_FONT: MonoFont = MonoFont {
 };
 
 const NUMBER_FONT: MonoFont = MonoFont {
-    image: ImageRaw::new(include_bytes!("../assets/numbers.raw"), 80),
-    glyph_mapping: &StrGlyphMapping::new("0123456789", 0),
+    image: ImageRaw::new(include_bytes!("../assets/numbers.raw"), 96),
+    glyph_mapping: &StrGlyphMapping::new("0123456789. ", 0),
     character_size: Size::new(8, 10),
     character_spacing: 0,
     baseline: 0,
@@ -32,8 +32,17 @@ const NUMBER_FONT: MonoFont = MonoFont {
     strikethrough: DecorationDimensions::default_strikethrough(3),
 };
 
+// TODO: add colours here
+
 pub const NUMBER_CHAR: MonoTextStyle<Rgb565> =
     MonoTextStyle::new(&NUMBER_FONT, Rgb565::new(1, 44, 23));
+
+pub const STAT_ONE_CHAR: MonoTextStyle<Rgb565> =
+    MonoTextStyle::new(&NUMBER_FONT, Rgb565::new(31, 23, 0));
+// stat two is just number char
+pub const STAT_THREE_CHAR: MonoTextStyle<Rgb565> =
+    MonoTextStyle::new(&NUMBER_FONT, Rgb565::new(25, 27, 28));
+
 pub const BLACK_CHAR: MonoTextStyle<Rgb565> = MonoTextStyle::new(&PICO_FONT, Rgb565::BLACK);
 pub const NORMAL_TEXT: TextStyle = TextStyleBuilder::new()
     .baseline(Baseline::Alphabetic)
@@ -55,6 +64,18 @@ pub const PROGRESS_BLUE: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
 pub const PROGRESS_ORANGE: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
     .fill_color(Rgb565::new(31, 23, 0))
     .build();
+
+pub const BACKGROUND: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
+    .fill_color(Rgb565::new(31, 59, 26))
+    .build();
+
+pub enum Screens {
+    Home,
+}
+
+impl Screens {
+    pub fn init(&self) {}
+}
 
 pub mod nav {
     use embedded_graphics::{image::Image, pixelcolor::Rgb565, Drawable};
@@ -131,14 +152,17 @@ pub mod home {
     use micromath::F32Ext;
     use tinytga::Tga;
 
-    use super::{CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE, PROGRESS_ORANGE};
+    use super::{
+        BACKGROUND, CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE, PROGRESS_ORANGE,
+        STAT_ONE_CHAR, STAT_THREE_CHAR,
+    };
     use crate::gui::{BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
     use crate::{
-        check, format, Button, Display, END_DATE, PROGRESS_SELECTED, STATS_SELECTED, TICKET_GOAL,
-        TICKET_LARGE, TICKET_OFFSET, TICKET_SMALL,
+        check, format, wifi, Button, Display, END_DATE, PROGRESS_SELECTED, STATS_SELECTED, TICKETS,
+        TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET, TICKET_SMALL,
     };
 
-    static SELECTED: AtomicBool = AtomicBool::new(false);
+    static SELECTED: AtomicBool = AtomicBool::new(true);
 
     pub async fn init(disp: &mut Display<'_>) {
         // NOTE FOR SELF: by this point the display has been cleared
@@ -152,6 +176,12 @@ pub mod home {
             Button::Up => {
                 if !SELECTED.load(Ordering::Relaxed) {
                     SELECTED.store(true, Ordering::Relaxed);
+
+                    Rectangle::new(Point::new(0, 14), Size::new(160, 114))
+                        .into_styled(BACKGROUND)
+                        .draw(disp)
+                        .unwrap();
+
                     let img: Tga<Rgb565> = Tga::from_slice(PROGRESS_SELECTED).unwrap();
                     Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
                 }
@@ -159,6 +189,12 @@ pub mod home {
             Button::Down => {
                 if SELECTED.load(Ordering::Relaxed) {
                     SELECTED.store(false, Ordering::Relaxed);
+
+                    Rectangle::new(Point::new(0, 14), Size::new(142, 114))
+                        .into_styled(BACKGROUND)
+                        .draw(disp)
+                        .unwrap();
+
                     let img: Tga<Rgb565> = Tga::from_slice(STATS_SELECTED).unwrap();
                     Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
                 }
@@ -423,5 +459,55 @@ pub mod home {
         DRAWN.store(true, core::sync::atomic::Ordering::Relaxed);
     }
 
-    async fn update_stats(disp: &mut Display<'_>, ticket_count: u16, now: DateTime<FixedOffset>) {}
+    async fn update_stats(disp: &mut Display<'_>, ticket_count: u16, now: DateTime<FixedOffset>) {
+        let end = FixedOffset::east_opt(14400)
+            .unwrap()
+            .timestamp_opt(1725163199, 0)
+            .unwrap();
+        let start = FixedOffset::east_opt(14400)
+            .unwrap()
+            .timestamp_opt(1718668800, 0)
+            .unwrap();
+        Text::new(
+            &format!(
+                4,
+                "{:.1}",
+                ((ticket_count - TICKET_OFFSET) as f32 / (now - start).num_days() as f32)
+            ),
+            Point::new(30, 24),
+            STAT_ONE_CHAR,
+        )
+        .draw(disp)
+        .unwrap();
+        Text::new("hrs/day on average.", Point::new(55, 26), BLACK_CHAR)
+            .draw(disp)
+            .unwrap();
+
+        Text::new(
+            &format!(
+                4,
+                "{:.1}",
+                TICKET_GOAL as f32 / (end - start).num_days() as f32
+            ),
+            Point::new(30, 40),
+            NUMBER_CHAR,
+        )
+        .draw(disp)
+        .unwrap();
+
+        Text::new("ideal daily tickets.", Point::new(55, 42), BLACK_CHAR)
+            .draw(disp)
+            .unwrap();
+
+        Text::new(
+            &format!(2, "{}", (now - start).num_days()),
+            Point::new(30, 56),
+            STAT_THREE_CHAR,
+        )
+        .draw(disp)
+        .unwrap();
+        Text::new("days left.", Point::new(55, 54), BLACK_CHAR)
+            .draw(disp)
+            .unwrap();
+    }
 }
