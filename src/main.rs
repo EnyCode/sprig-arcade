@@ -143,6 +143,7 @@ pub enum Events {
     ButtonPressed(Button),
     ButtonReleased(Button),
     TicketCountUpdated(u16, DateTime<FixedOffset>),
+    TriggerWifiUpdate,
     Placeholder,
 }
 
@@ -400,7 +401,8 @@ async fn main(spawner: Spawner) -> ! {
 
     home::init(&mut disp).await;
 
-    spawner.spawn(wifi::get_hours(wifi)).unwrap();
+    spawner.spawn(wifi::fetch_data(wifi)).unwrap();
+    spawner.spawn(wifi::wifi_trigger()).unwrap();
 
     loop {
         // TODO: move screens to an enum?

@@ -157,6 +157,7 @@ pub mod home {
         STAT_ONE_CHAR, STAT_THREE_CHAR,
     };
     use crate::gui::{BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
+    use crate::wifi::RUN;
     use crate::{
         check, format, wifi, Button, Display, END_DATE, PROGRESS_SELECTED, STATS_SELECTED, TICKETS,
         TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET, TICKET_SMALL,
@@ -177,26 +178,28 @@ pub mod home {
                 if !SELECTED.load(Ordering::Relaxed) {
                     SELECTED.store(true, Ordering::Relaxed);
 
-                    Rectangle::new(Point::new(0, 14), Size::new(160, 114))
+                    Rectangle::new(Point::new(0, 14), Size::new(146, 114))
                         .into_styled(BACKGROUND)
                         .draw(disp)
                         .unwrap();
 
                     let img: Tga<Rgb565> = Tga::from_slice(PROGRESS_SELECTED).unwrap();
                     Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
+                    RUN.signal(true);
                 }
             }
             Button::Down => {
                 if SELECTED.load(Ordering::Relaxed) {
                     SELECTED.store(false, Ordering::Relaxed);
 
-                    Rectangle::new(Point::new(0, 14), Size::new(142, 114))
+                    Rectangle::new(Point::new(0, 14), Size::new(146, 114))
                         .into_styled(BACKGROUND)
                         .draw(disp)
                         .unwrap();
 
                     let img: Tga<Rgb565> = Tga::from_slice(STATS_SELECTED).unwrap();
                     Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
+                    RUN.signal(true);
                 }
             }
             _ => (),
@@ -210,11 +213,11 @@ pub mod home {
         now: DateTime<FixedOffset>,
     ) {
         match SELECTED.load(Ordering::Relaxed) {
-            true => {
+            false => {
                 info!("[GUI] Updating stats...");
                 update_stats(disp, ticket_count, now).await;
             }
-            false => {
+            true => {
                 info!("[GUI] Updating progress bar...");
                 update_progress(disp, ticket_count, old_count, now).await;
             }
@@ -258,7 +261,6 @@ pub mod home {
             .timestamp_opt(1718668800, 0)
             .unwrap();
 
-        let days_left = end - now;
         let passed_days = now - start;
         info!(
             "We are {:?} days into Arcade out of {:?} days",
@@ -460,6 +462,18 @@ pub mod home {
     }
 
     async fn update_stats(disp: &mut Display<'_>, ticket_count: u16, now: DateTime<FixedOffset>) {
+        macro_rules! round_format {
+            ($num:expr) => {{
+                let num = $num;
+                let rounded = (num * 10.0).round() / 10.0;
+                if rounded.fract() == 0.0 {
+                    format!(3, "{}", rounded)
+                } else {
+                    format!(3, "{:.1}", rounded)
+                }
+            }};
+        }
+
         let end = FixedOffset::east_opt(14400)
             .unwrap()
             .timestamp_opt(1725163199, 0)
@@ -468,46 +482,62 @@ pub mod home {
             .unwrap()
             .timestamp_opt(1718668800, 0)
             .unwrap();
-        Text::new(
-            &format!(
-                4,
-                "{:.1}",
-                ((ticket_count - TICKET_OFFSET) as f32 / (now - start).num_days() as f32)
-            ),
-            Point::new(30, 24),
-            STAT_ONE_CHAR,
-        )
-        .draw(disp)
-        .unwrap();
-        Text::new("hrs/day on average.", Point::new(55, 26), BLACK_CHAR)
+
+        let hrs = round_format!(
+            (ticket_count - TICKET_OFFSET) as f32 / ((now - start).num_days() as f32 + 1.)
+        );
+
+        Text::new(&hrs, Point::new(23, 29), STAT_ONE_CHAR)
             .draw(disp)
             .unwrap();
-
         Text::new(
-            &format!(
-                4,
-                "{:.1}",
-                TICKET_GOAL as f32 / (end - start).num_days() as f32
-            ),
-            Point::new(30, 40),
-            NUMBER_CHAR,
+            "hrs/day on average.",
+            Point::new(26 + (hrs.len() * 8) as i32, 31),
+            BLACK_CHAR,
         )
         .draw(disp)
         .unwrap();
 
-        Text::new("ideal daily tickets.", Point::new(55, 42), BLACK_CHAR)
+        let ideal = round_format!(TICKET_GOAL as f32 / (end - start).num_days() as f32);
+
+        Text::new(&ideal, Point::new(23, 45), NUMBER_CHAR)
             .draw(disp)
             .unwrap();
 
         Text::new(
-            &format!(2, "{}", (now - start).num_days()),
-            Point::new(30, 56),
-            STAT_THREE_CHAR,
+            "ideal daily tickets.",
+            Point::new(26 + (ideal.len() * 8) as i32, 47),
+            BLACK_CHAR,
         )
         .draw(disp)
         .unwrap();
-        Text::new("days left.", Point::new(55, 54), BLACK_CHAR)
+
+        let days_left = format!(2, "{}", (end - now).num_days() - 1);
+
+        Text::new(&days_left, Point::new(23, 61), STAT_THREE_CHAR)
             .draw(disp)
             .unwrap();
+        Text::new(
+            "days left.",
+            Point::new(26 + (days_left.len() * 8) as i32, 63),
+            BLACK_CHAR,
+        )
+        .draw(disp)
+        .unwrap();
+
+        let on_track = round_format!(
+            (TICKET_GOAL - ticket_count + TICKET_OFFSET) as f32 / (end - now).num_days() as f32
+        );
+
+        Text::new(&on_track, Point::new(23, 77), STAT_ONE_CHAR)
+            .draw(disp)
+            .unwrap();
+        Text::new(
+            "hrs/day to get on track.",
+            Point::new(26 + (on_track.len() * 8) as i32, 79),
+            BLACK_CHAR,
+        )
+        .draw(disp)
+        .unwrap();
     }
 }

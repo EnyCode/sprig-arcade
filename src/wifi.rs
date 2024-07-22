@@ -17,8 +17,9 @@ use embassy_rp::{
     Peripherals,
 };
 use embassy_sync::{
-    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
+    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex, ThreadModeRawMutex},
     mutex::Mutex,
+    signal::Signal,
 };
 use embassy_time::Timer;
 use embedded_graphics::draw_target::DrawTarget;
@@ -47,6 +48,8 @@ use crate::{
     gui::{BLACK_CHAR, CENTERED_TEXT},
     Irqs, EVENTS, TICKETS,
 };
+
+pub static RUN: Signal<ThreadModeRawMutex, bool> = Signal::new();
 
 #[derive(Deserialize, Debug)]
 pub struct StatsResponse {
@@ -266,7 +269,15 @@ pub async fn setup(
 }
 
 #[embassy_executor::task]
-pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
+pub async fn wifi_trigger() {
+    loop {
+        Timer::after_secs(5 * 60).await;
+        RUN.signal(true);
+    }
+}
+
+#[embassy_executor::task]
+pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
     let client_state = TcpClientState::<1, 1024, 1024>::new();
     let tcp_client = TcpClient::new(stack, &client_state);
     let dns_client = DnsSocket::new(stack);
@@ -374,6 +385,8 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
             let rx_buffer = &mut RX_BUF;
             rx_buffer.fill(0);
 
+            debug!("filled buffer");
+
             let resp = req
                 .send(rx_buffer)
                 .await
@@ -413,10 +426,11 @@ pub async fn get_hours(stack: &'static Stack<cyw43::NetDriver<'static>>) {
                     },
                 ))
                 .await;
-
-            debug!("[Wifi] Sent event successfully!");
-            Timer::after_secs(60 * 5).await;
-            debug!("[Wifi] Starting again!");
         }
+        debug!("[Wifi] Sent event successfully!");
+        RUN.reset();
+        debug!("[Wifi] {:?}", RUN.signaled());
+        RUN.wait().await;
+        debug!("[Wifi] Starting again!");
     }
 }
