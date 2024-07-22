@@ -37,12 +37,13 @@ use embedded_graphics::image::Image;
 use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
 use embedded_graphics::primitives::{Primitive, PrimitiveStyle, Rectangle};
 use embedded_graphics::Drawable;
-use gui::home;
 use gui::nav::{update_active, update_selected};
+use gui::{home, Screens, BACKGROUND};
 use log::info;
 use st7735_lcd::{Orientation, ST7735};
 use static_cell::StaticCell;
 use tinytga::Tga;
+use wifi::RequestData;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
@@ -142,7 +143,7 @@ pub enum Button {
 pub enum Events {
     ButtonPressed(Button),
     ButtonReleased(Button),
-    TicketCountUpdated(u16, DateTime<FixedOffset>),
+    DataUpdate(RequestData, DateTime<FixedOffset>),
     TriggerWifiUpdate,
     Placeholder,
 }
@@ -233,6 +234,47 @@ pub enum NavButton {
 }
 
 impl NavButton {
+    pub fn is_neighbour_of(&self, neighbour: &NavButton) -> bool {
+        match self {
+            NavButton::Home => match neighbour {
+                NavButton::Session => true,
+                NavButton::Errors => true,
+                _ => false,
+            },
+            NavButton::Session => match neighbour {
+                NavButton::Home => true,
+                NavButton::Leaderboard => true,
+                _ => false,
+            },
+            NavButton::Leaderboard => match neighbour {
+                NavButton::Session => true,
+                NavButton::Projects => true,
+                _ => false,
+            },
+            NavButton::Projects => match neighbour {
+                NavButton::Leaderboard => true,
+                NavButton::Wishlist => true,
+                _ => false,
+            },
+            NavButton::Wishlist => match neighbour {
+                NavButton::Projects => true,
+                NavButton::Shop => true,
+                _ => false,
+            },
+            NavButton::Shop => match neighbour {
+                NavButton::Wishlist => true,
+                NavButton::Errors => true,
+                _ => false,
+            },
+            NavButton::Errors => match neighbour {
+                NavButton::Shop => true,
+                NavButton::Home => true,
+                _ => false,
+            },
+            NavButton::None => false,
+        }
+    }
+
     pub fn pos(&self) -> Point {
         match self {
             NavButton::Home => Point::new(23, 0),
@@ -372,14 +414,9 @@ async fn main(spawner: Spawner) -> ! {
         ))
         .unwrap();
 
-    let logo: Tga<Rgb565> = Tga::from_slice(ARCADE_LOGO).unwrap();
     let buttons: Tga<Rgb565> = Tga::from_slice(BUTTONS).unwrap();
     let btn: Tga<Rgb565> = Tga::from_slice(BTN).unwrap();
     let selected_btn: Tga<Rgb565> = Tga::from_slice(SELECTED_BTN).unwrap();
-
-    Image::new(&logo, Point::new(30, 98))
-        .draw(&mut disp)
-        .unwrap();
 
     Image::new(&buttons, Point::new(23, 0))
         .draw(&mut disp)
@@ -399,7 +436,7 @@ async fn main(spawner: Spawner) -> ! {
     info!("Done!");
     Timer::after_nanos(20000).await;
 
-    home::init(&mut disp).await;
+    let mut screen = Screens::Home;
 
     spawner.spawn(wifi::fetch_data(wifi)).unwrap();
     spawner.spawn(wifi::wifi_trigger()).unwrap();
@@ -412,20 +449,42 @@ async fn main(spawner: Spawner) -> ! {
                 Button::Left | Button::Right => {
                     selected = move_nav(&selected, &active, &button, &mut disp).await;
                 }
-                Button::A => active = select_btn(&selected, &active, &mut disp).await,
-                btn => home::input(btn, &mut disp).await,
+                Button::A => {
+                    active = select_btn(&selected, &active, &mut disp).await;
+                    Rectangle::new(Point::new(0, 14), Size::new(160, 114))
+                        .into_styled(BACKGROUND)
+                        .draw(&mut disp)
+                        .unwrap();
+                    screen = match active {
+                        NavButton::Home => Screens::Home,
+                        NavButton::Session => Screens::Session,
+                        _ => Screens::Home,
+                    };
+                    screen.init().await;
+                    wifi::RUN.signal(true);
+                }
+                btn => screen.input(btn, &mut disp).await,
             },
             Events::ButtonReleased(button) => {
                 info!("released {:?}", button);
                 info!("------------------");
             }
-            Events::TicketCountUpdated(tickets, now) => {
+            Events::DataUpdate(data, now) => {
                 info!("got the event!");
-                let old = TICKETS.load(Ordering::Relaxed);
-                TICKETS.store(tickets, Ordering::Relaxed);
-                info!("tickets {}, used to have {}", tickets, old,);
+                match data {
+                    RequestData::Stats(tickets) => {
+                        let old = TICKETS.load(Ordering::Relaxed);
+                        TICKETS.store(tickets, Ordering::Relaxed);
+                        info!("tickets {}, used to have {}", tickets, old,);
 
-                home::update(&mut disp, tickets as u16, old, now).await;
+                        screen.update(&mut disp, data, old, now).await;
+                    }
+                    _ => {
+                        screen
+                            .update(&mut disp, data, TICKETS.load(Ordering::Relaxed), now)
+                            .await;
+                    }
+                }
             }
             _ => {}
         }

@@ -18,7 +18,7 @@ use embassy_rp::{
 };
 use embassy_sync::{
     blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex, ThreadModeRawMutex},
-    mutex::Mutex,
+    mutex::{Mutex, MutexGuard},
     signal::Signal,
 };
 use embassy_time::Timer;
@@ -50,6 +50,20 @@ use crate::{
 };
 
 pub static RUN: Signal<ThreadModeRawMutex, bool> = Signal::new();
+
+#[derive(Deserialize, Debug)]
+pub struct SessionResponse {
+    ok: bool,
+    data: Option<SessionData>,
+    error: Option<&'static str>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct SessionData {
+    elapsed: u8,
+    goal: &'static str,
+    paused: bool,
+}
 
 #[derive(Deserialize, Debug)]
 pub struct StatsResponse {
@@ -84,6 +98,23 @@ async fn wifi_task(
 async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
     stack.run().await
 }
+
+#[derive(Clone, Copy, Debug)]
+pub enum RequestType {
+    Stats,
+    Session,
+}
+
+#[derive(Debug)]
+pub enum RequestData {
+    // Ticket count
+    Stats(u16),
+    // Elapsed time, goal, paused
+    Session(u8, &'static str, bool),
+    None,
+}
+
+pub static REQUEST_TYPE: Mutex<ThreadModeRawMutex, RequestType> = Mutex::new(RequestType::Stats);
 
 pub async fn setup(
     spawner: &Spawner,
@@ -289,7 +320,7 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
         unsafe {
             let rx_buffer = &mut RX_BUF;
             rx_buffer.fill(0);
-            debug!("[Wifi] Fetching Hack Hour stats");
+            debug!("[Wifi] Fetching Hack Hour info");
             Timer::after_nanos(200000).await;
 
             // TODO: use tls
@@ -301,12 +332,24 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
             );*/
 
             debug!("got client");
+            Timer::after_nanos(200000).await;
 
-            let mut tickets = 0;
+            let mut data = RequestData::None;
             {
-                let mut url = String::<50>::new();
-                url.push_str("http://hackhour.hackclub.com/api/stats/")
-                    .unwrap();
+                let mut url = String::<52>::new();
+                let typ = *(REQUEST_TYPE.lock().await);
+                match typ {
+                    RequestType::Stats => {
+                        url.push_str("http://hackhour.hackclub.com/api/stats/")
+                            .unwrap();
+                    }
+                    RequestType::Session => {
+                        url.push_str("http://hackhour.hackclub.com/api/session/")
+                            .unwrap();
+                    }
+                }
+                //url.push_str("http://hackhour.hackclub.com/api/stats/")
+                //    .unwrap();
                 url.push_str(env!("SLACK_ID")).unwrap();
 
                 debug!("making request");
@@ -338,24 +381,58 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
                 debug!("sent request {:?}", from_utf8(resp));
                 Timer::after_nanos(200000).await;
 
-                let body: StatsResponse = match serde_json_core::from_slice(resp) {
-                    Ok(b) => b.0,
-                    Err(e) => {
-                        error!("[Wifi] Failed to parse the Hack Hour response. Is it down?",);
-                        error!(
-                            "[Wifi] Recieved response `{:?}` and failed with error `{:?}",
-                            "d", e
-                        );
-                        return;
-                    }
-                };
+                match typ {
+                    RequestType::Stats => {
+                        let body: StatsResponse = match serde_json_core::from_slice(resp) {
+                            Ok(b) => b.0,
+                            Err(e) => {
+                                error!(
+                                    "[Wifi] Failed to parse the Hack Hour response. Is it down?",
+                                );
+                                error!(
+                                    "[Wifi] Recieved response `{:?}` and failed with error `{:?}",
+                                    from_utf8(resp),
+                                    e
+                                );
+                                return;
+                            }
+                        };
 
-                if !body.ok {
-                    error!("[Wifi] Hack Hour response failed. Are you authenticated properly?");
-                    error!("[Wifi] Error is `{}`", body.error.unwrap());
-                    return;
+                        if !body.ok {
+                            error!(
+                                "[Wifi] Hack Hour response failed. Are you authenticated properly?"
+                            );
+                            error!("[Wifi] Error is `{}`", body.error.unwrap());
+                            return;
+                        }
+                        data = RequestData::Stats(body.data.clone().unwrap().sessions as u16);
+                    }
+                    RequestType::Session => {
+                        let body: SessionResponse = match serde_json_core::from_slice(resp) {
+                            Ok(b) => b.0,
+                            Err(e) => {
+                                error!(
+                                    "[Wifi] Failed to parse the Hack Hour response. Is it down?",
+                                );
+                                error!(
+                                    "[Wifi] Recieved response `{:?}` and failed with error `{:?}",
+                                    from_utf8(resp),
+                                    e
+                                );
+                                return;
+                            }
+                        };
+
+                        if !body.ok {
+                            error!(
+                                "[Wifi] Hack Hour response failed. Are you authenticated properly?"
+                            );
+                            return;
+                        }
+                        let d = body.data.unwrap();
+                        data = RequestData::Session(d.elapsed, d.goal, d.paused);
+                    }
                 }
-                tickets = body.data.clone().unwrap().sessions as u16;
             }
 
             debug!("got tickets");
@@ -405,7 +482,8 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
                     error!("[Wifi] Failed to parse time response. ");
                     error!(
                         "[Wifi] Recieved response `{:?}` and failed with error `{:?}`",
-                        "d", e
+                        from_utf8(resp),
+                        e
                     );
                     return;
                 }
@@ -415,8 +493,8 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
             Timer::after_nanos(200000).await;
 
             EVENTS
-                .send(crate::Events::TicketCountUpdated(
-                    tickets,
+                .send(crate::Events::DataUpdate(
+                    data,
                     match DateTime::parse_from_rfc3339(body.datetime) {
                         Ok(dt) => dt,
                         Err(e) => {

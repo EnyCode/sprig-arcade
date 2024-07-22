@@ -1,3 +1,4 @@
+use chrono::{DateTime, FixedOffset};
 use embedded_graphics::{
     geometry::Size,
     image::ImageRaw,
@@ -5,6 +6,11 @@ use embedded_graphics::{
     pixelcolor::{Rgb565, RgbColor},
     primitives::{PrimitiveStyle, PrimitiveStyleBuilder},
     text::{Alignment, Baseline, TextStyle, TextStyleBuilder},
+};
+
+use crate::{
+    wifi::{RequestData, RequestType, REQUEST_TYPE},
+    Button, Display,
 };
 
 const PICO_FONT: MonoFont = MonoFont {
@@ -71,10 +77,40 @@ pub const BACKGROUND: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
 
 pub enum Screens {
     Home,
+    Session,
 }
 
-impl Screens {
-    pub fn init(&self) {}
+impl<'a> Screens {
+    pub async fn init(&self) {
+        match self {
+            Screens::Home => {
+                *(REQUEST_TYPE.lock().await) = RequestType::Stats;
+            }
+            Screens::Session => {
+                *(REQUEST_TYPE.lock().await) = RequestType::Session;
+            }
+        }
+    }
+
+    pub async fn input(&self, btn: Button, disp: &mut Display<'a>) {
+        match self {
+            Screens::Home => home::input(btn, disp).await,
+            _ => {} //Screens::Session => home::input(btn, disp).await,
+        }
+    }
+
+    pub async fn update(
+        &self,
+        disp: &mut Display<'a>,
+        data: RequestData,
+        old_count: u16,
+        now: DateTime<FixedOffset>,
+    ) {
+        match self {
+            Screens::Home => home::update(disp, data, old_count, now).await,
+            Screens::Session => session::update(disp, data, now).await,
+        }
+    }
 }
 
 pub mod nav {
@@ -97,19 +133,32 @@ pub mod nav {
         })
         .unwrap();
         let selected_btn: Tga<Rgb565> = Tga::from_slice(SELECTED_BTN).unwrap();
-
         Image::new(&btn, prev_selected.pos()).draw(disp).unwrap();
-
-        Image::new(&selected_btn, selected.pos())
-            .draw(disp)
-            .unwrap();
-
-        Image::new(&selected.icon(), selected.icon_pos())
-            .draw(disp)
-            .unwrap();
         Image::new(&prev_selected.icon(), prev_selected.icon_pos())
             .draw(disp)
             .unwrap();
+
+        if active != selected {
+            Image::new(&selected_btn, selected.pos())
+                .draw(disp)
+                .unwrap();
+
+            Image::new(&selected.icon(), selected.icon_pos())
+                .draw(disp)
+                .unwrap();
+        }
+
+        if selected == active || prev_selected.is_neighbour_of(active) {
+            Image::new(
+                &Tga::<Rgb565>::from_slice(ACTIVE_BTN).unwrap(),
+                active.pos(),
+            )
+            .draw(disp)
+            .unwrap();
+            Image::new(&active.icon(), active.icon_pos())
+                .draw(disp)
+                .unwrap();
+        }
     }
 
     pub fn update_active(active: &NavButton, prev_active: &NavButton, disp: &mut Display) {
@@ -148,7 +197,7 @@ pub mod home {
     };
     use embedded_graphics_framebuf::FrameBuf;
     use heapless::String;
-    use log::info;
+    use log::{error, info};
     use micromath::F32Ext;
     use tinytga::Tga;
 
@@ -157,20 +206,13 @@ pub mod home {
         STAT_ONE_CHAR, STAT_THREE_CHAR,
     };
     use crate::gui::{BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
-    use crate::wifi::RUN;
+    use crate::wifi::{RequestData, RUN};
     use crate::{
-        check, format, wifi, Button, Display, END_DATE, PROGRESS_SELECTED, STATS_SELECTED, TICKETS,
-        TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET, TICKET_SMALL,
+        check, format, wifi, Button, Display, ARCADE_LOGO, END_DATE, PROGRESS_SELECTED,
+        STATS_SELECTED, TICKETS, TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET, TICKET_SMALL,
     };
 
     static SELECTED: AtomicBool = AtomicBool::new(true);
-
-    pub async fn init(disp: &mut Display<'_>) {
-        // NOTE FOR SELF: by this point the display has been cleared
-        // TODO: move arcade logo drawing to here
-        let img: Tga<Rgb565> = Tga::from_slice(PROGRESS_SELECTED).unwrap();
-        Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
-    }
 
     pub async fn input(btn: Button, disp: &mut Display<'_>) {
         match btn {
@@ -208,18 +250,28 @@ pub mod home {
 
     pub async fn update(
         disp: &mut Display<'_>,
-        ticket_count: u16,
+        data: RequestData,
         old_count: u16,
         now: DateTime<FixedOffset>,
     ) {
+        let tickets;
+        match data {
+            RequestData::Stats(ticket_count) => {
+                tickets = ticket_count;
+            }
+            _ => {
+                error!("[GUI] [Home] Recieved incorrect data!");
+                return;
+            }
+        }
         match SELECTED.load(Ordering::Relaxed) {
             false => {
                 info!("[GUI] Updating stats...");
-                update_stats(disp, ticket_count, now).await;
+                update_stats(disp, tickets, now).await;
             }
             true => {
                 info!("[GUI] Updating progress bar...");
-                update_progress(disp, ticket_count, old_count, now).await;
+                update_progress(disp, tickets, old_count, now).await;
             }
         }
     }
@@ -230,6 +282,12 @@ pub mod home {
         old_count: u16,
         now: DateTime<FixedOffset>,
     ) {
+        let logo: Tga<Rgb565> = Tga::from_slice(ARCADE_LOGO).unwrap();
+        Image::new(&logo, Point::new(30, 98)).draw(disp).unwrap();
+
+        let img: Tga<Rgb565> = Tga::from_slice(PROGRESS_SELECTED).unwrap();
+        Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
+
         let mut count = String::<4>::new();
         write!(count, "{} ", ticket_count - TICKET_OFFSET).unwrap();
         info!("{:?}", count);
@@ -539,5 +597,16 @@ pub mod home {
         )
         .draw(disp)
         .unwrap();
+    }
+}
+
+pub mod session {
+    use chrono::{DateTime, FixedOffset};
+    use log::info;
+
+    use crate::{wifi::RequestData, Display};
+
+    pub async fn update(disp: &mut Display<'_>, data: RequestData, now: DateTime<FixedOffset>) {
+        info!("got data from session {:?}", data);
     }
 }
