@@ -1,4 +1,4 @@
-use chrono::{DateTime, FixedOffset};
+use embassy_rp::rtc::DateTime;
 use embedded_graphics::{
     geometry::Size,
     image::ImageRaw,
@@ -79,6 +79,29 @@ pub const BACKGROUND: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
     .fill_color(Rgb565::new(31, 59, 26))
     .build();
 
+fn days_since_epoch(datetime: &DateTime) -> i32 {
+    let is_leap_year =
+        datetime.year % 4 == 0 && (datetime.year % 100 != 0 || datetime.year % 400 == 0);
+    let mut days = (datetime.year as i32 - 1) * 365;
+    days += (datetime.year as i32 - 1) / 4 - (datetime.year as i32 - 1) / 100
+        + (datetime.year as i32 - 1) / 400;
+    let mut month_days = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if is_leap_year {
+        month_days[2] = 29;
+    }
+    for i in 1..datetime.month {
+        days += month_days[i as usize];
+    }
+    days += datetime.day as i32;
+    days
+}
+
+fn days_between(date: &DateTime, other: &DateTime) -> i32 {
+    let days1 = days_since_epoch(date);
+    let days2 = days_since_epoch(other);
+    (days1 - days2).abs()
+}
+
 pub enum Screens {
     Home,
     Session,
@@ -108,7 +131,7 @@ impl<'a> Screens {
         disp: &mut Display<'a>,
         data: RequestData,
         old_count: u16,
-        now: DateTime<FixedOffset>,
+        now: DateTime,
     ) {
         match self {
             Screens::Home => home::update(disp, data, old_count, now).await,
@@ -122,7 +145,10 @@ pub mod nav {
     use log::info;
     use tinytga::Tga;
 
-    use crate::{Display, NavButton, ACTIVE_BTN, BTN, SELECTED_BTN};
+    use crate::{
+        util::{ACTIVE_BTN, BTN, SELECTED_BTN},
+        Display, NavButton,
+    };
 
     pub fn update_selected(
         selected: &NavButton,
@@ -184,11 +210,10 @@ pub mod nav {
 
 pub mod home {
     use core::cmp::max;
-    use core::{f32::consts::PI, sync::atomic::AtomicBool};
-
-    use chrono::{DateTime, FixedOffset, TimeZone};
     use core::fmt::Write;
     use core::sync::atomic::Ordering;
+    use core::{f32::consts::PI, sync::atomic::AtomicBool};
+    use embassy_rp::rtc::{DateTime, DayOfWeek};
     use embassy_time::Timer;
     use embedded_graphics::draw_target::DrawTarget;
     use embedded_graphics::{
@@ -209,11 +234,12 @@ pub mod home {
         BACKGROUND, CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE, PROGRESS_ORANGE,
         STAT_ONE_CHAR, STAT_THREE_CHAR,
     };
-    use crate::gui::{BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
+    use crate::gui::{days_between, BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
     use crate::wifi::{RequestData, RUN};
     use crate::{
-        check, format, wifi, Button, Display, ARCADE_LOGO, END_DATE, PROGRESS_SELECTED,
-        STATS_SELECTED, TICKETS, TICKET_GOAL, TICKET_LARGE, TICKET_OFFSET, TICKET_SMALL,
+        check, format,
+        util::{ARCADE_LOGO, PROGRESS_SELECTED, STATS_SELECTED, TICKET_LARGE, TICKET_SMALL},
+        wifi, Button, Display, END_DATE, TICKETS, TICKET_GOAL, TICKET_OFFSET,
     };
 
     static SELECTED: AtomicBool = AtomicBool::new(true);
@@ -252,12 +278,7 @@ pub mod home {
         }
     }
 
-    pub async fn update(
-        disp: &mut Display<'_>,
-        data: RequestData,
-        old_count: u16,
-        now: DateTime<FixedOffset>,
-    ) {
+    pub async fn update(disp: &mut Display<'_>, data: RequestData, old_count: u16, now: DateTime) {
         let tickets;
         match data {
             RequestData::Stats(ticket_count) => {
@@ -284,7 +305,7 @@ pub mod home {
         disp: &mut Display<'_>,
         ticket_count: u16,
         old_count: u16,
-        now: DateTime<FixedOffset>,
+        now: DateTime,
     ) {
         let logo: Tga<Rgb565> = Tga::from_slice(ARCADE_LOGO).unwrap();
         Image::new(&logo, Point::new(30, 98)).draw(disp).unwrap();
@@ -314,23 +335,40 @@ pub mod home {
 
         info!("checking days left");
         Timer::after_nanos(200000).await;
-        let end = FixedOffset::east_opt(14400)
+        /*let end = FixedOffset::east_opt(14400)
             .unwrap()
             .timestamp_opt(1725163199, 0)
             .unwrap();
         let start = FixedOffset::east_opt(14400)
             .unwrap()
             .timestamp_opt(1718668800, 0)
-            .unwrap();
+            .unwrap();*/
+        let end = DateTime {
+            year: 2024,
+            month: 9,
+            day: 31,
+            hour: 23,
+            minute: 59,
+            second: 59,
+            day_of_week: DayOfWeek::Saturday,
+        };
+        let start = DateTime {
+            year: 2024,
+            month: 6,
+            day: 18,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            day_of_week: DayOfWeek::Tuesday,
+        };
 
-        let passed_days = now - start;
+        let passed_days = days_between(&now, &start);
         info!(
             "We are {:?} days into Arcade out of {:?} days",
-            passed_days.num_days(),
-            (end - start).num_days()
+            passed_days,
+            days_between(&end, &start),
         );
-        let ideal_percent =
-            (passed_days.num_days() as f32 + 1.0) / ((end - start).num_days() as f32 - 1.0);
+        let ideal_percent = (passed_days as f32 + 1.0) / (days_between(&end, &start) as f32 - 1.0);
         info!(
             "The ideal percentage is {:?} with {:?} tickets",
             ideal_percent,
@@ -523,7 +561,7 @@ pub mod home {
         DRAWN.store(true, core::sync::atomic::Ordering::Relaxed);
     }
 
-    async fn update_stats(disp: &mut Display<'_>, ticket_count: u16, now: DateTime<FixedOffset>) {
+    async fn update_stats(disp: &mut Display<'_>, ticket_count: u16, now: DateTime) {
         macro_rules! round_format {
             ($num:expr) => {{
                 let num = $num;
@@ -536,17 +574,27 @@ pub mod home {
             }};
         }
 
-        let end = FixedOffset::east_opt(14400)
-            .unwrap()
-            .timestamp_opt(1725163199, 0)
-            .unwrap();
-        let start = FixedOffset::east_opt(14400)
-            .unwrap()
-            .timestamp_opt(1718668800, 0)
-            .unwrap();
+        let end = DateTime {
+            year: 2024,
+            month: 9,
+            day: 31,
+            hour: 23,
+            minute: 59,
+            second: 59,
+            day_of_week: DayOfWeek::Saturday,
+        };
+        let start = DateTime {
+            year: 2024,
+            month: 6,
+            day: 18,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            day_of_week: DayOfWeek::Tuesday,
+        };
 
         let hrs = round_format!(
-            (ticket_count - TICKET_OFFSET) as f32 / ((now - start).num_days() as f32 + 1.)
+            (ticket_count - TICKET_OFFSET) as f32 / (days_between(&now, &start) as f32 + 1.)
         );
 
         Text::new(&hrs, Point::new(23, 29), STAT_ONE_CHAR)
@@ -560,7 +608,7 @@ pub mod home {
         .draw(disp)
         .unwrap();
 
-        let ideal = round_format!(TICKET_GOAL as f32 / (end - start).num_days() as f32);
+        let ideal = round_format!(TICKET_GOAL as f32 / days_between(&end, &start) as f32);
 
         Text::new(&ideal, Point::new(23, 45), NUMBER_CHAR)
             .draw(disp)
@@ -574,7 +622,7 @@ pub mod home {
         .draw(disp)
         .unwrap();
 
-        let days_left = format!(2, "{}", (end - now).num_days() - 1);
+        let days_left = format!(2, "{}", days_between(&end, &now) - 1);
 
         Text::new(&days_left, Point::new(23, 61), STAT_THREE_CHAR)
             .draw(disp)
@@ -588,7 +636,7 @@ pub mod home {
         .unwrap();
 
         let on_track = round_format!(
-            (TICKET_GOAL - ticket_count + TICKET_OFFSET) as f32 / (end - now).num_days() as f32
+            (TICKET_GOAL - ticket_count + TICKET_OFFSET) as f32 / days_between(&end, &now) as f32
         );
 
         Text::new(&on_track, Point::new(23, 77), STAT_ONE_CHAR)
@@ -605,18 +653,19 @@ pub mod home {
 }
 
 pub mod session {
-    use chrono::{DateTime, FixedOffset};
+    use embassy_rp::rtc::DateTime;
     use embedded_graphics::{geometry::Point, image::Image, text::Text, Drawable};
     use log::info;
     use tinytga::Tga;
 
     use crate::{
         gui::{BLACK_NUMBER_CHAR, CENTERED_TEXT},
+        util::PROGRESS_BAR,
         wifi::RequestData,
-        Display, PROGRESS_BAR,
+        Display,
     };
 
-    pub async fn update(disp: &mut Display<'_>, data: RequestData, now: DateTime<FixedOffset>) {
+    pub async fn update(disp: &mut Display<'_>, data: RequestData, now: DateTime) {
         info!("got data from session {:?}", data);
         Image::new(&Tga::from_slice(PROGRESS_BAR).unwrap(), Point::new(20, 53))
             .draw(disp)

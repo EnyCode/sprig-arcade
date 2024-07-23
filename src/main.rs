@@ -2,31 +2,23 @@
 #![no_main]
 #![allow(async_fn_in_trait)]
 
-use core::any::Any;
 use core::cell::RefCell;
-use core::future::IntoFuture;
 use core::sync::atomic::{AtomicU16, Ordering};
 
-use chrono::{DateTime, FixedOffset, TimeZone, Utc};
-use cyw43_pio::PioSpi;
+use chrono::{DateTime, Datelike, FixedOffset, Timelike, Weekday};
 use defmt::*;
 use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
-use embassy_futures::select::{select, select3, select4};
-use embassy_net::Stack;
+use embassy_futures::select::{select3, select4};
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output};
-use embassy_rp::peripherals::{
-    self, DMA_CH0, PIN_14, PIN_15, PIN_23, PIN_25, PIN_6, PIN_8, PIO0, UART0, USB,
-};
-use embassy_rp::pio::{InterruptHandler, Pio};
+use embassy_rp::peripherals::{self, PIO0, USB};
+use embassy_rp::pio::InterruptHandler;
+use embassy_rp::rtc::{DayOfWeek, Rtc};
 use embassy_rp::spi::{self, Spi};
 use embassy_rp::spi::{Blocking, Phase, Polarity};
-use embassy_rp::uart::Uart;
 use embassy_rp::usb::{self, Driver};
-use embassy_sync::blocking_mutex::raw::{
-    CriticalSectionRawMutex, NoopRawMutex, ThreadModeRawMutex,
-};
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, ThreadModeRawMutex};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
@@ -34,15 +26,18 @@ use embassy_time::{Delay, Timer};
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::geometry::{Point, Size};
 use embedded_graphics::image::Image;
-use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
-use embedded_graphics::primitives::{Primitive, PrimitiveStyle, Rectangle};
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::primitives::{Primitive, Rectangle};
 use embedded_graphics::Drawable;
 use gui::nav::{update_active, update_selected};
-use gui::{home, Screens, BACKGROUND};
+use gui::{Screens, BACKGROUND};
 use log::info;
 use st7735_lcd::{Orientation, ST7735};
-use static_cell::StaticCell;
 use tinytga::Tga;
+use util::{
+    Button, Events, BTN, BUTTONS, ERRORS_ICON, HOME_ICON, LEADERBOARD_ICON, PROJECTS_ICON,
+    SELECTED_BTN, SESSION_ICON, SHOP_ICON, WISHLIST_ICON,
+};
 use wifi::RequestData;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -52,33 +47,8 @@ bind_interrupts!(struct Irqs {
 });
 
 mod gui;
+mod util;
 mod wifi;
-
-// TODO: replace legacy code with this
-#[macro_export]
-macro_rules! format {
-    ($size:expr, $($arg:tt)*) => {{
-        let mut string = heapless::String::<$size>::new();
-        match core::write!(&mut string, $($arg)*) {
-            Ok(_) => string,
-            Err(err) => {
-                log::error!("Failed to format string with error {:?}", err);
-                String::<$size>::new()
-            },
-        }
-    }};
-}
-
-// TODO: dont think this is needed
-#[macro_export]
-macro_rules! check {
-    ($e:expr, $default:expr) => {{
-        match $e {
-            x if x.overflowing() => $default,
-            x => x.0,
-        }
-    }};
-}
 
 // TODO: move everything to settings
 pub const TICKET_GOAL: u16 = 160;
@@ -86,32 +56,6 @@ pub const TICKET_OFFSET: u16 = 14;
 pub static TICKETS: AtomicU16 = AtomicU16::new(0);
 pub const END_DATE: Mutex<CriticalSectionRawMutex, Option<DateTime<FixedOffset>>> =
     Mutex::new(None);
-
-// we import everything here to avoid repeats and for ease of use
-// makes it easier to eventually move to a fixed memory location if their all together (probably)
-const ARCADE_LOGO: &'static [u8; 2347] = include_bytes!("../assets/arcade.tga");
-const BUTTONS: &'static [u8; 1942] = include_bytes!("../assets/buttons.tga");
-const BTN: &'static [u8; 204] = include_bytes!("../assets/btn.tga");
-const SELECTED_BTN: &'static [u8; 204] = include_bytes!("../assets/selected_btn.tga");
-const ACTIVE_BTN: &'static [u8; 204] = include_bytes!("../assets/active_btn.tga");
-
-const HOME_ICON: &'static [u8; 190] = include_bytes!("../assets/buttons/home.tga");
-const SESSION_ICON: &'static [u8; 232] = include_bytes!("../assets/buttons/session.tga");
-const LEADERBOARD_ICON: &'static [u8; 160] = include_bytes!("../assets/buttons/leaderboard.tga");
-const PROJECTS_ICON: &'static [u8; 182] = include_bytes!("../assets/buttons/projects.tga");
-const WISHLIST_ICON: &'static [u8; 218] = include_bytes!("../assets/buttons/wishlist.tga");
-const SHOP_ICON: &'static [u8; 204] = include_bytes!("../assets/buttons/shop.tga");
-const ERRORS_ICON: &'static [u8; 212] = include_bytes!("../assets/buttons/errors.tga");
-
-const TICKET_LARGE: &'static [u8; 471] = include_bytes!("../assets/ticket_large.tga");
-const TICKET_SMALL: &'static [u8; 187] = include_bytes!("../assets/ticket_small.tga");
-
-const PROGRESS_BAR: &'static [u8; 1033] = include_bytes!("../assets/session/progress.tga");
-
-// TODO: if there is more side bars then move to similar system as top nav
-const PROGRESS_SELECTED: &'static [u8; 710] =
-    include_bytes!("../assets/home/progress_selected.tga");
-const STATS_SELECTED: &'static [u8; 710] = include_bytes!("../assets/home/stats_selected.tga");
 
 type Display<'a> = ST7735<
     SpiDeviceWithConfig<
@@ -130,24 +74,6 @@ static EVENTS: Channel<ThreadModeRawMutex, Events, 8> = Channel::new();
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
     embassy_usb_logger::run!(1024, log::LevelFilter::Debug, driver);
-}
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum Button {
-    Up,
-    Down,
-    Left,
-    Right,
-    A,
-    B,
-}
-
-pub enum Events {
-    ButtonPressed(Button),
-    ButtonReleased(Button),
-    DataUpdate(RequestData, DateTime<FixedOffset>),
-    TriggerWifiUpdate,
-    Placeholder,
 }
 
 #[embassy_executor::task]
@@ -440,8 +366,12 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut screen = Screens::Home;
 
+    wifi::configure_rtc(wifi).await;
+
     spawner.spawn(wifi::fetch_data(wifi)).unwrap();
     spawner.spawn(wifi::wifi_trigger()).unwrap();
+
+    let mut rtc = Rtc::new(p.RTC);
 
     loop {
         // TODO: move screens to an enum?
@@ -471,7 +401,14 @@ async fn main(spawner: Spawner) -> ! {
                 info!("released {:?}", button);
                 info!("------------------");
             }
-            Events::DataUpdate(data, now) => {
+            Events::DataUpdate(data) => {
+                if !rtc.is_running() {
+                    error!(
+                        "[Event] Recieved data event while RTC is not configured! Forwarding..."
+                    );
+                    EVENTS.send(Events::DataUpdate(data)).await;
+                    continue;
+                }
                 info!("got the event!");
                 match data {
                     RequestData::Stats(tickets) => {
@@ -479,14 +416,44 @@ async fn main(spawner: Spawner) -> ! {
                         TICKETS.store(tickets, Ordering::Relaxed);
                         info!("tickets {}, used to have {}", tickets, old,);
 
-                        screen.update(&mut disp, data, old, now).await;
+                        screen
+                            .update(&mut disp, data, old, rtc.now().unwrap())
+                            .await;
                     }
                     _ => {
                         screen
-                            .update(&mut disp, data, TICKETS.load(Ordering::Relaxed), now)
+                            .update(
+                                &mut disp,
+                                data,
+                                TICKETS.load(Ordering::Relaxed),
+                                rtc.now().unwrap(),
+                            )
                             .await;
                     }
                 }
+            }
+            Events::RtcUpdate(date) => {
+                let day_of_week = match date.weekday() {
+                    Weekday::Mon => DayOfWeek::Monday,
+                    Weekday::Tue => DayOfWeek::Tuesday,
+                    Weekday::Wed => DayOfWeek::Wednesday,
+                    Weekday::Thu => DayOfWeek::Thursday,
+                    Weekday::Fri => DayOfWeek::Friday,
+                    Weekday::Sat => DayOfWeek::Saturday,
+                    Weekday::Sun => DayOfWeek::Sunday,
+                };
+
+                let now = embassy_rp::rtc::DateTime {
+                    year: date.year() as u16,
+                    month: date.month() as u8,
+                    day: date.day() as u8,
+                    day_of_week,
+                    hour: date.hour() as u8,
+                    minute: date.minute() as u8,
+                    second: date.second() as u8,
+                };
+
+                rtc.set_datetime(now).unwrap();
             }
             _ => {}
         }

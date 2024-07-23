@@ -1,4 +1,8 @@
-use core::str::{from_utf8, FromStr};
+use core::{
+    ptr::addr_of_mut,
+    str::{from_utf8, FromStr},
+    sync::atomic::AtomicBool,
+};
 
 use chrono::{DateTime, FixedOffset, TimeZone};
 use cyw43::State;
@@ -80,7 +84,6 @@ pub struct StatsData {
 
 #[derive(Deserialize, Debug)]
 pub struct TimeData {
-    #[serde(rename = "dateTime")]
     pub datetime: &'static str,
 }
 
@@ -314,19 +317,7 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
     let tcp_client = TcpClient::new(stack, &client_state);
     let dns_client = DnsSocket::new(stack);
 
-    let seed = RoscRng.next_u64();
-
-    let mut tls_read_buffer = [0; 16640];
-    let mut tls_write_buffer = [0; 16640];
-
-    let tls_config = TlsConfig::new(
-        seed,
-        &mut tls_read_buffer,
-        &mut tls_write_buffer,
-        TlsVerify::None,
-    );
-
-    let mut http_client = HttpClient::new_with_tls(&tcp_client, &dns_client, tls_config);
+    let mut http_client = HttpClient::new(&tcp_client, &dns_client);
     static mut RX_BUF: [u8; 8192] = [0; 8192];
 
     loop {
@@ -335,8 +326,6 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
             rx_buffer.fill(0);
             debug!("[Wifi] Fetching Hack Hour info");
             Timer::after_nanos(200000).await;
-
-            // TODO: use tls
 
             debug!("got client");
             Timer::after_nanos(200000).await;
@@ -447,75 +436,88 @@ pub async fn fetch_data(stack: &'static Stack<cyw43::NetDriver<'static>>) {
             debug!("making request");
             Timer::after_nanos(200000).await;
 
-            let mut req = match http_client
-                .request(
-                    reqwless::request::Method::GET,
-                    "https://www.timeapi.io/api/Time/current/zone?timeZone=US/Eastern",
-                )
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    error!("[Wifi] Failed to make time request. ");
-                    error!("[Wifi] Error is `{:?}`", e);
-                    Timer::after_nanos(4000000).await;
-                    return;
-                }
-            };
-
-            debug!("made request");
-            Timer::after_nanos(200000).await;
-
-            let rx_buffer = &mut RX_BUF;
-            rx_buffer.fill(0);
-
-            debug!("filled buffer");
-
-            let resp = req
-                .send(rx_buffer)
-                .await
-                .unwrap()
-                .body()
-                .read_to_end()
-                .await
-                .unwrap();
-
-            debug!("sent request");
-            Timer::after_nanos(200000).await;
-
-            let body: TimeData = match serde_json_core::from_slice(resp) {
-                Ok(b) => b.0,
-                Err(e) => {
-                    error!("[Wifi] Failed to parse time response. ");
-                    error!(
-                        "[Wifi] Recieved response `{:?}` and failed with error `{:?}`",
-                        from_utf8(resp),
-                        e
-                    );
-                    return;
-                }
-            };
-
-            debug!("parsed data");
-            Timer::after_nanos(200000).await;
-
-            EVENTS
-                .send(crate::Events::DataUpdate(
-                    data,
-                    match DateTime::parse_from_rfc3339(body.datetime) {
-                        Ok(dt) => dt,
-                        Err(e) => {
-                            error!("[Wifi] Failed to parse datetime `{:?}`", e);
-                            return;
-                        }
-                    },
-                ))
-                .await;
+            EVENTS.send(crate::Events::DataUpdate(data)).await;
         }
         debug!("[Wifi] Sent event successfully!");
         RUN.reset();
         debug!("[Wifi] {:?}", RUN.signaled());
         RUN.wait().await;
         debug!("[Wifi] Starting again!");
+    }
+}
+
+//#[embassy_executor::task]
+pub async fn configure_rtc(stack: &'static Stack<cyw43::NetDriver<'static>>) {
+    static RAN: AtomicBool = AtomicBool::new(false);
+    if RAN.load(core::sync::atomic::Ordering::Relaxed) {
+        error!("[Wifi] Tried to configure RTC twice!");
+        return;
+    }
+    RAN.store(true, core::sync::atomic::Ordering::Relaxed);
+
+    unsafe {
+        debug!("[Wifi] Configuring RTC");
+        let client_state = TcpClientState::<1, 1024, 1024>::new();
+        let tcp_client = TcpClient::new(stack, &client_state);
+        let dns_client = DnsSocket::new(stack);
+
+        let mut http_client = HttpClient::new(&tcp_client, &dns_client);
+        static mut RX_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
+        let rx_buffer = RX_BUF.init([0; 8192]);
+
+        let mut req = match http_client
+            .request(
+                reqwless::request::Method::GET,
+                "http://worldtimeapi.org/api/timezone/US/Eastern",
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                error!("[Wifi] Failed to make time request. ");
+                error!("[Wifi] Error is `{:?}`", e);
+                Timer::after_nanos(4000000).await;
+                return;
+            }
+        };
+
+        debug!("made request");
+        Timer::after_nanos(200000).await;
+
+        debug!("filled buffer");
+
+        let resp = req
+            .send(rx_buffer)
+            .await
+            .unwrap()
+            .body()
+            .read_to_end()
+            .await
+            .unwrap();
+
+        debug!("sent request");
+        Timer::after_nanos(200000).await;
+
+        let body: TimeData = match serde_json_core::from_slice(resp) {
+            Ok(b) => b.0,
+            Err(e) => {
+                error!("[Wifi] Failed to parse time response. ");
+                error!(
+                    "[Wifi] Recieved response `{:?}` and failed with error `{:?}`",
+                    from_utf8(resp),
+                    e
+                );
+                return;
+            }
+        };
+
+        debug!("[Wifi] Configured RTC");
+        Timer::after_nanos(200000).await;
+
+        EVENTS
+            .send(crate::Events::RtcUpdate(
+                DateTime::parse_from_rfc3339(body.datetime).unwrap(),
+            ))
+            .await;
     }
 }
