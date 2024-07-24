@@ -306,8 +306,14 @@ pub async fn setup(
 #[embassy_executor::task]
 pub async fn wifi_trigger() {
     loop {
-        Timer::after_secs(UPDATE_INTERVAL.load(core::sync::atomic::Ordering::Relaxed) as u64 * 60)
-            .await;
+        let mut i = 0;
+        loop {
+            Timer::after_secs(60).await;
+            i += 1;
+            if i == UPDATE_INTERVAL.load(core::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+        }
         RUN.signal(true);
     }
 }

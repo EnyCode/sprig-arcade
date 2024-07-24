@@ -70,6 +70,6 @@ pub enum Events {
     ButtonReleased(Button),
     DataUpdate(RequestData),
     RtcUpdate(DateTime<FixedOffset>),
-    FlashSessionScreen(String<4>),
+    FlashSessionScreen(bool),
     Placeholder,
 }

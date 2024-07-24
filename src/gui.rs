@@ -669,8 +669,8 @@ pub mod session {
     use core::str::FromStr;
 
     use embassy_executor::Spawner;
-    use embassy_rp::rtc::DateTime;
-    use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, signal::Signal};
+    use embassy_rp::{peripherals::FLASH, rtc::DateTime};
+    use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex, signal::Signal};
     use embassy_time::Timer;
     use embedded_graphics::{
         geometry::Point,
@@ -686,39 +686,43 @@ pub mod session {
 
     use crate::{
         format,
-        gui::{BLACK_FILL, BLACK_NUMBER_CHAR, CENTERED_TEXT},
+        gui::{BLACK_CHAR, BLACK_FILL, BLACK_NUMBER_CHAR, CENTERED_TEXT},
         util::{Events, PROGRESS_BAR},
         wifi::RequestData,
         Display, EVENTS, UPDATE_INTERVAL,
     };
+
+    use super::BACKGROUND;
 
     pub static ON_SCREEN: Signal<ThreadModeRawMutex, bool> = Signal::new();
 
     pub async fn init(spawner: &Spawner) {
         UPDATE_INTERVAL.store(1, core::sync::atomic::Ordering::Relaxed);
         ON_SCREEN.signal(true);
-        spawner.spawn(flash_task())
+        spawner.spawn(flash_task()).unwrap();
     }
 
     #[embassy_executor::task]
-    pub async fn flash_task(default: String<4>, flash: String<4>) {
+    pub async fn flash_task() {
         let mut flashing = false;
         while ON_SCREEN.signaled() {
-            EVENTS
-                .send(Events::FlashSessionScreen(match flashing {
-                    true => flash.clone(),
-                    false => default.clone(),
-                }))
-                .await;
+            EVENTS.send(Events::FlashSessionScreen(flashing)).await;
             flashing = !flashing;
-            Timer::after_millis(500).await;
+            Timer::after_secs(1).await;
         }
     }
 
-    pub async fn flash(text: String<4>, disp: &mut Display<'_>) {
-        Text::with_text_style(&text, Point::new(80, 40), BLACK_NUMBER_CHAR, CENTERED_TEXT)
-            .draw(disp)
-            .unwrap();
+    pub async fn flash(flash: bool, disp: &mut Display<'_>) {
+        if flash {
+            Rectangle::new(Point::new(73, 36), Size::new(8, 8))
+                .into_styled(BACKGROUND)
+                .draw(disp)
+                .unwrap();
+        } else {
+            Text::new(":", Point::new(73, 36), BLACK_NUMBER_CHAR)
+                .draw(disp)
+                .unwrap();
+        }
     }
 
     pub async fn update(disp: &mut Display<'_>, data: RequestData, now: DateTime) {
@@ -736,29 +740,52 @@ pub mod session {
             .draw(disp)
             .unwrap();
 
-        let t = match elapsed {
+        let display = match elapsed {
             0 => String::<4>::from_str("1:00").unwrap(),
-            _ => format!(4, "0:{:?}", 60 - elapsed),
+            60 => String::<4>::from_str("DONE").unwrap(),
+            _ => format!(4, "0:{:02}", 60 - elapsed),
         };
 
-        let flash = match elapsed {
-            0 => String::<4>::from_str("1 00").unwrap(),
-            _ => format!(4, "0 {:?}", 60 - elapsed),
-        };
-
-        Text::with_text_style(&t, Point::new(80, 40), BLACK_NUMBER_CHAR, CENTERED_TEXT)
+        Rectangle::new(Point::new(64, 40), Size::new(32, 8))
+            .into_styled(BACKGROUND)
             .draw(disp)
             .unwrap();
+
+        Text::with_text_style(
+            &display,
+            Point::new(80, 40),
+            BLACK_NUMBER_CHAR,
+            CENTERED_TEXT,
+        )
+        .draw(disp)
+        .unwrap();
+
+        /*Rectangle::new(Point::new(64, 40), Size::new(32, 8))
+        .into_styled(BACKGROUND)
+        .draw(disp)
+        .unwrap();*/
+
+        Text::new(
+            "Ticket No. 362\nCurrently paused.",
+            Point::new(20, 80),
+            BLACK_CHAR,
+        )
+        .draw(disp)
+        .unwrap();
 
         RoundedRectangle::with_equal_corners(
             Rectangle::new(
                 Point::new(20, 53),
-                Size::new((120. * (elapsed / 60) as f32) as u32, 6),
+                Size::new((120. * (elapsed as f32 / 60.)) as u32, 6),
             ),
             Size::new(2, 2),
         )
         .into_styled(BLACK_FILL)
         .draw(disp)
         .unwrap();
+
+        Text::with_text_style(goal, Point::new(80, 62), BLACK_CHAR, CENTERED_TEXT)
+            .draw(disp)
+            .unwrap();
     }
 }
