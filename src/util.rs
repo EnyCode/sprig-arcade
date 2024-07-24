@@ -1,4 +1,5 @@
 use chrono::{DateTime, FixedOffset};
+use heapless::String;
 
 use crate::wifi::RequestData;
 
@@ -31,6 +32,7 @@ pub const STATS_SELECTED: &'static [u8; 710] = include_bytes!("../assets/home/st
 #[macro_export]
 macro_rules! format {
     ($size:expr, $($arg:tt)*) => {{
+        use core::fmt::Write;
         let mut string = heapless::String::<$size>::new();
         match core::write!(&mut string, $($arg)*) {
             Ok(_) => string,
@@ -67,7 +69,7 @@ pub enum Events {
     ButtonPressed(Button),
     ButtonReleased(Button),
     DataUpdate(RequestData),
-    TriggerWifiUpdate,
     RtcUpdate(DateTime<FixedOffset>),
+    FlashSessionScreen(String<4>),
     Placeholder,
 }
