@@ -69,8 +69,7 @@ type Display<'a> = ST7735<
     Output<'a, peripherals::PIN_26>,
 >;
 
-// TODO: double check length
-static EVENTS: Channel<ThreadModeRawMutex, Events, 8> = Channel::new();
+static EVENTS: Channel<ThreadModeRawMutex, Events, 4> = Channel::new();
 
 pub static UPDATE_INTERVAL: AtomicU8 = AtomicU8::new(5);
 
@@ -80,9 +79,6 @@ async fn logger_task(driver: Driver<'static, USB>) {
 }
 
 #[embassy_executor::task]
-// TODO: priotize easy updating or efficient updating
-// e.g. draw full button thing then draw selected stuff
-// or draw default stuff on the old one and selected stuff on the new one
 async fn input_task(
     mut up: Input<'static, AnyPin>,
     mut down: Input<'static, AnyPin>,
@@ -94,15 +90,6 @@ async fn input_task(
     debug!("Starting input event task.");
     Timer::after_nanos(20000).await;
     loop {
-        let previous = [
-            a.is_high(),
-            b.is_high(),
-            up.is_high(),
-            down.is_high(),
-            left.is_high(),
-            right.is_high(),
-        ];
-
         let result = select3(
             a.wait_for_any_edge(),
             b.wait_for_any_edge(),
@@ -143,11 +130,7 @@ async fn input_task(
             false => Events::ButtonPressed(change),
         };
 
-        // changed button
-
         EVENTS.send(event).await;
-        //info!("Button pressed! {:?}", change);
-        //Timer::after_nanos(20000).await;
     }
 }
 
@@ -156,7 +139,7 @@ pub enum NavButton {
     None,
     Home,
     Session,
-    Leaderboard,
+    Leaderboard, // TODO: remove (or hide by default w/o implementation)
     Projects,
     Wishlist, // TODO: merge wishlist with shop and make a settings page?
     Shop,
@@ -278,18 +261,10 @@ async fn main(spawner: Spawner) -> ! {
     let p = embassy_rp::init(Default::default());
     let driver = Driver::new(p.USB, Irqs);
     spawner.spawn(logger_task(driver)).unwrap();
-    let mut bl = Output::new(bl, Level::Low);
+    let mut bl = Output::new(p.PIN_17, Level::Low);
 
-    // TODO: necessary?
-    for _ in 0..2 {
-        info!(".");
-        Timer::after_secs(1).await;
-    }
     info!("Launched Arcade Sprig!");
-    // TODO: remove logging wait thing, dont know why its needed but it works
     Timer::after_nanos(20000).await;
-
-    info!("Hello, world!");
 
     let clk = p.PIN_18;
     let mosi = p.PIN_19;
@@ -297,7 +272,6 @@ async fn main(spawner: Spawner) -> ! {
     let display_cs = p.PIN_20;
     let dcx = p.PIN_22;
     let rst = p.PIN_26;
-    let bl = p.PIN_17;
 
     let mut display_config = spi::Config::default();
     display_config.frequency = 64_000_000;
@@ -331,9 +305,6 @@ async fn main(spawner: Spawner) -> ! {
     )
     .await;
 
-    info!("Done with wifi.");
-    Timer::after_secs(1).await;
-
     spawner
         .spawn(input_task(
             Input::new(AnyPin::from(p.PIN_5), embassy_rp::gpio::Pull::Up),
@@ -365,9 +336,6 @@ async fn main(spawner: Spawner) -> ! {
 
     update_active(&selected, &active, &mut disp);
 
-    info!("Done!");
-    Timer::after_nanos(20000).await;
-
     let mut screen = Screens::Home;
 
     wifi::configure_rtc(wifi).await;
@@ -378,8 +346,6 @@ async fn main(spawner: Spawner) -> ! {
     let mut rtc = Rtc::new(p.RTC);
 
     loop {
-        // TODO: move screens to an enum?
-        // would make it simpler to manage and switch between screens
         match EVENTS.receive().await {
             Events::ButtonPressed(button) => match button {
                 Button::Left | Button::Right => {
@@ -404,23 +370,20 @@ async fn main(spawner: Spawner) -> ! {
                 btn => screen.input(btn, &mut disp).await,
             },
             Events::ButtonReleased(button) => {
-                info!("released {:?}", button);
-                info!("------------------");
+                // TODO: do something here?
             }
             Events::DataUpdate(data) => {
                 if !rtc.is_running() {
                     error!(
-                        "[Event] Recieved data event while RTC is not configured! Forwarding..."
+                        "[Event] Recieved data event while RTC is not configured! Forwarding to next run..."
                     );
                     EVENTS.send(Events::DataUpdate(data)).await;
                     continue;
                 }
-                info!("got the event!");
                 match data {
                     RequestData::Stats(tickets) => {
                         let old = TICKETS.load(Ordering::Relaxed);
                         TICKETS.store(tickets, Ordering::Relaxed);
-                        info!("tickets {}, used to have {}", tickets, old,);
 
                         screen
                             .update(&mut disp, data, old, rtc.now().unwrap())
@@ -475,7 +438,6 @@ async fn move_nav(
     button: &Button,
     disp: &mut Display<'_>,
 ) -> NavButton {
-    info!("moving nav!");
     let prev_selected = selected.clone();
     let next = match button {
         Button::Left => selected.left(),

@@ -228,7 +228,7 @@ pub mod home {
     };
     use embedded_graphics_framebuf::FrameBuf;
     use heapless::String;
-    use log::{error, info};
+    use log::{debug, error, info};
     use micromath::F32Ext;
     use tinytga::Tga;
 
@@ -286,17 +286,17 @@ pub mod home {
                 tickets = ticket_count;
             }
             _ => {
-                error!("[GUI] [Home] Recieved incorrect data!");
+                error!("[GUI] Recieved incorrect data!");
                 return;
             }
         }
         match SELECTED.load(Ordering::Relaxed) {
             false => {
-                info!("[GUI] Updating stats...");
+                debug!("[GUI] Updating stats...");
                 update_stats(disp, tickets, now).await;
             }
             true => {
-                info!("[GUI] Updating progress bar...");
+                debug!("[GUI] Updating progress bar...");
                 update_progress(disp, tickets, old_count, now).await;
             }
         }
@@ -313,7 +313,7 @@ pub mod home {
 
         let mut count = String::<4>::new();
         write!(count, "{} ", ticket_count - TICKET_OFFSET).unwrap();
-        info!("{:?}", count);
+        debug!("[GUI] {:?}", count);
         write_text!(
             custom,
             &count,
@@ -328,9 +328,6 @@ pub mod home {
             Point::new(80 + (3 * (count.len() - 1)) as i32, 28),
             disp
         );
-
-        info!("checking days left");
-        Timer::after_nanos(200000).await;
 
         let end = DateTime {
             year: 2024,
@@ -352,18 +349,7 @@ pub mod home {
         };
 
         let passed_days = days_between(&now, &start);
-        info!(
-            "We are {:?} days into Arcade out of {:?} days",
-            passed_days,
-            days_between(&end, &start),
-        );
         let ideal_percent = (passed_days as f32 + 1.0) / (days_between(&end, &start) as f32 - 1.0);
-        info!(
-            "The ideal percentage is {:?} with {:?} tickets",
-            ideal_percent,
-            ideal_percent * TICKET_GOAL as f32
-        );
-        //let ideal_tickets = TICKET_GOAL as f32 / days_left.num_days() as f32;
 
         let old = old_count
             - if TICKET_OFFSET > old_count {
@@ -394,15 +380,9 @@ pub mod home {
         );
 
         let per = (ticket_count - TICKET_OFFSET) as f32 / TICKET_GOAL as f32;
-        info!("Found per");
-        Timer::after_nanos(200000).await;
 
-        // TODO: increase max ticket count to 4 digits?
         // TODO: max out percentage to 100%
         let complete = format!(11, "{}% there!", (per * 100.).round());
-
-        info!("got complete");
-        Timer::after_nanos(200000).await;
 
         let ideal = format!(
             28,
@@ -410,25 +390,6 @@ pub mod home {
             (ideal_percent * 100.).round(),
             (ideal_percent * TICKET_GOAL as f32).round()
         );
-
-        info!("got ideal");
-        Timer::after_nanos(200000).await;
-
-        info!(
-            "info is {:?}",
-            max(
-                TICKET_GOAL as i32 - ticket_count as i32 + TICKET_OFFSET as i32,
-                0
-            ),
-            //((1. - per) * 100.).round(),
-            // TODO: fix potention overflow
-            // its in more places than this
-            //TICKET_GOAL,
-            //ticket_count,
-            //TICKET_OFFSET,
-            //TICKET_GOAL - ticket_count + TICKET_OFFSET
-        );
-        Timer::after_nanos(200000).await;
 
         let left = format!(
             32,
@@ -439,9 +400,6 @@ pub mod home {
                 0
             ),
         );
-
-        info!("got left");
-        Timer::after_nanos(200000).await;
 
         write_text!(&complete, Point::new(28, 62), disp);
         write_text!(&ideal, Point::new(28, 71), disp);
@@ -461,10 +419,6 @@ pub mod home {
             disp
         );
 
-        info!(
-            "old {:?}, ticket count {:?}, ticket offset {:?}, ticket goal {:?}",
-            old, ticket_count, TICKET_OFFSET, TICKET_GOAL
-        );
         let prev = old as f32 / TICKET_GOAL as f32;
         let change = (ticket_count - TICKET_OFFSET - old) as f32 / TICKET_GOAL as f32;
 
@@ -479,8 +433,6 @@ pub mod home {
             PROGRESS_BG,
             &mut fbuf
         );
-
-        info!("prev {:?}, change {:?}", prev, change);
 
         for i in 0..30 {
             let mul = -((PI * (i as f32 / 30.)).cos() - 1.) / 2.;
@@ -707,12 +659,13 @@ pub mod session {
         );
         write_large_text!(&tickets, Point::new(46, 114), disp);
 
+        draw_rect!(Point::new(134, 118), Size::new(32, 8), BACKGROUND, disp);
         if paused {
-            draw_rect!(Point::new(102, 118), Size::new(56, 8), BACKGROUND, disp);
             write_text!("Paused", Point::new(134, 118), disp);
-        } else {
-            draw_rect!(Point::new(134, 118), Size::new(32, 8), BACKGROUND, disp);
+        } else if elapsed < 60 {
             write_text!("Ongoing", Point::new(130, 118), disp);
+        } else {
+            write_text!("Finished", Point::new(126, 118), disp);
         }
 
         draw_rounded_rect!(

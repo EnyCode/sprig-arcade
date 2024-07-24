@@ -168,5 +168,4 @@ pub enum Events {
     DataUpdate(RequestData),
     RtcUpdate(DateTime<FixedOffset>),
     FlashSessionScreen(bool),
-    Placeholder,
 }

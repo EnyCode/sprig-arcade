@@ -210,7 +210,7 @@ pub async fn setup(
     .draw(display)
     .unwrap();
 
-    info!("joining wifi");
+    info!("[Wifi] Joining network");
 
     loop {
         //match control.join_open(WIFI_NETWORK).await { // for open networks
@@ -220,7 +220,10 @@ pub async fn setup(
         {
             Ok(_) => break,
             Err(err) => {
-                info!("join failed with status={}", err.status);
+                info!(
+                    "[Wifi] Failed to join with status {}, trying again",
+                    err.status
+                );
                 Timer::after_nanos(20000).await;
             }
         }
@@ -236,10 +239,9 @@ pub async fn setup(
 
     let mut i = 0;
 
-    info!("waiting for DHCP...");
+    info!("[Wifi] Waiting for DHCP");
     Timer::after_nanos(20000).await;
     while !stack.is_config_up() {
-        info!("checking DHCP");
         Timer::after_millis(100).await;
         RoundedRectangle::with_equal_corners(
             Rectangle::new(Point::new(20, 49), Size::new(50 + (50 * (i / 10)), 6)),
@@ -254,7 +256,7 @@ pub async fn setup(
     }
 
     info!(
-        "DHCP is now up! {:?}",
+        "[Wifi] DHCP is up with IP {}",
         stack.config_v4().unwrap().address.address()
     );
     Timer::after_nanos(20000).await;
@@ -267,7 +269,7 @@ pub async fn setup(
     .draw(display)
     .unwrap();
 
-    info!("waiting for link up...");
+    info!("[Wifi] Waiting for link");
     Timer::after_nanos(20000).await;
     while !stack.is_link_up() {
         Timer::after_millis(500).await;
@@ -281,13 +283,13 @@ pub async fn setup(
     .draw(display)
     .unwrap();
 
-    info!("Link is up!");
+    info!("[Wifi] Link is up");
     Timer::after_nanos(20000).await;
 
-    info!("waiting for stack to be up...");
+    info!("[Wifi] Waiting for stack");
     Timer::after_nanos(20000).await;
     stack.wait_config_up().await;
-    info!("Stack is up!");
+    info!("[Wifi] Stack is up");
     Timer::after_nanos(20000).await;
 
     RoundedRectangle::with_equal_corners(
@@ -299,6 +301,8 @@ pub async fn setup(
     .unwrap();
 
     display.clear(Rgb565::new(31, 60, 27)).unwrap();
+
+    info!("[Wifi] Up and running");
 
     stack
 }
