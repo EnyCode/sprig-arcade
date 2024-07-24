@@ -29,8 +29,8 @@ const PICO_FONT: MonoFont = MonoFont {
 };
 
 const NUMBER_FONT: MonoFont = MonoFont {
-    image: ImageRaw::new(include_bytes!("../assets/numbers.raw"), 104),
-    glyph_mapping: &StrGlyphMapping::new("0123456789. :", 0),
+    image: ImageRaw::new(include_bytes!("../assets/numbers.raw"), 136),
+    glyph_mapping: &StrGlyphMapping::new("0123456789. :DONE", 0),
     character_size: Size::new(8, 10),
     character_spacing: 0,
     baseline: 0,
@@ -60,7 +60,7 @@ pub const NORMAL_TEXT: TextStyle = TextStyleBuilder::new()
     .alignment(Alignment::Left)
     .build();
 pub const CENTERED_TEXT: TextStyle = TextStyleBuilder::new()
-    .baseline(Baseline::Middle)
+    .baseline(Baseline::Alphabetic)
     .alignment(Alignment::Center)
     .build();
 
@@ -666,7 +666,7 @@ pub mod home {
 }
 
 pub mod session {
-    use core::str::FromStr;
+    use core::{str::FromStr, sync::atomic::AtomicBool};
 
     use embassy_executor::Spawner;
     use embassy_rp::{peripherals::FLASH, rtc::DateTime};
@@ -695,6 +695,7 @@ pub mod session {
     use super::BACKGROUND;
 
     pub static ON_SCREEN: Signal<ThreadModeRawMutex, bool> = Signal::new();
+    pub static FLASH: AtomicBool = AtomicBool::new(true);
 
     pub async fn init(spawner: &Spawner) {
         UPDATE_INTERVAL.store(1, core::sync::atomic::Ordering::Relaxed);
@@ -713,15 +714,17 @@ pub mod session {
     }
 
     pub async fn flash(flash: bool, disp: &mut Display<'_>) {
-        if flash {
-            Rectangle::new(Point::new(73, 36), Size::new(8, 8))
-                .into_styled(BACKGROUND)
-                .draw(disp)
-                .unwrap();
-        } else {
-            Text::new(":", Point::new(73, 36), BLACK_NUMBER_CHAR)
-                .draw(disp)
-                .unwrap();
+        if FLASH.load(core::sync::atomic::Ordering::Relaxed) {
+            if flash {
+                Rectangle::new(Point::new(73, 40), Size::new(8, 10))
+                    .into_styled(BACKGROUND)
+                    .draw(disp)
+                    .unwrap();
+            } else {
+                Text::new(":", Point::new(73, 40), BLACK_NUMBER_CHAR)
+                    .draw(disp)
+                    .unwrap();
+            }
         }
     }
 
@@ -745,8 +748,11 @@ pub mod session {
             60 => String::<4>::from_str("DONE").unwrap(),
             _ => format!(4, "0:{:02}", 60 - elapsed),
         };
+        if elapsed == 60 {
+            FLASH.store(false, core::sync::atomic::Ordering::Relaxed);
+        }
 
-        Rectangle::new(Point::new(64, 40), Size::new(32, 8))
+        Rectangle::new(Point::new(64, 40), Size::new(32, 10))
             .into_styled(BACKGROUND)
             .draw(disp)
             .unwrap();
@@ -765,13 +771,31 @@ pub mod session {
         .draw(disp)
         .unwrap();*/
 
-        Text::new(
-            "Ticket No. 362\nCurrently paused.",
-            Point::new(20, 80),
-            BLACK_CHAR,
-        )
-        .draw(disp)
-        .unwrap();
+        Text::new("Ticket No. ", Point::new(2, 118), BLACK_CHAR)
+            .draw(disp)
+            .unwrap();
+
+        Text::new("143", Point::new(46, 114), BLACK_NUMBER_CHAR)
+            .draw(disp)
+            .unwrap();
+
+        if paused {
+            Rectangle::new(Point::new(102, 118), Size::new(56, 8))
+                .into_styled(BLACK_FILL)
+                .draw(disp)
+                .unwrap();
+            Text::new("Paused", Point::new(134, 118), BLACK_CHAR)
+                .draw(disp)
+                .unwrap();
+        } else {
+            Rectangle::new(Point::new(134, 118), Size::new(32, 8))
+                .into_styled(BACKGROUND)
+                .draw(disp)
+                .unwrap();
+            Text::new("Ongoing", Point::new(130, 118), BLACK_CHAR)
+                .draw(disp)
+                .unwrap();
+        }
 
         RoundedRectangle::with_equal_corners(
             Rectangle::new(
