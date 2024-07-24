@@ -278,6 +278,7 @@ async fn main(spawner: Spawner) -> ! {
     let p = embassy_rp::init(Default::default());
     let driver = Driver::new(p.USB, Irqs);
     spawner.spawn(logger_task(driver)).unwrap();
+    let mut bl = Output::new(bl, Level::Low);
 
     // TODO: necessary?
     for _ in 0..2 {
@@ -316,8 +317,6 @@ async fn main(spawner: Spawner) -> ! {
     let dcx = Output::new(dcx, Level::Low);
     let rst = Output::new(rst, Level::Low);
 
-    let _bl = Output::new(bl, Level::High);
-
     let mut disp: Display = ST7735::new(display_spi, dcx, rst, true, false, 160, 128);
 
     disp.init(&mut Delay).unwrap();
@@ -326,6 +325,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // BOILERPLATE MARK
 
+    bl.set_high();
     let wifi = wifi::setup(
         &spawner, p.PIN_23, p.PIN_25, p.PIO0, p.PIN_24, p.PIN_29, p.DMA_CH0, &mut disp,
     )
@@ -386,18 +386,20 @@ async fn main(spawner: Spawner) -> ! {
                     selected = move_nav(&selected, &active, &button, &mut disp).await;
                 }
                 Button::A => {
-                    active = select_btn(&selected, &active, &mut disp).await;
-                    Rectangle::new(Point::new(0, 14), Size::new(160, 114))
-                        .into_styled(BACKGROUND)
-                        .draw(&mut disp)
-                        .unwrap();
-                    screen = match active {
-                        NavButton::Home => Screens::Home,
-                        NavButton::Session => Screens::Session,
-                        _ => Screens::Home,
-                    };
-                    screen.init(&spawner).await;
-                    wifi::RUN.signal(true);
+                    if active != selected {
+                        active = select_btn(&selected, &active, &mut disp).await;
+                        Rectangle::new(Point::new(0, 14), Size::new(160, 114))
+                            .into_styled(BACKGROUND)
+                            .draw(&mut disp)
+                            .unwrap();
+                        screen = match active {
+                            NavButton::Home => Screens::Home,
+                            NavButton::Session => Screens::Session,
+                            _ => Screens::Home,
+                        };
+                        screen.init(&spawner).await;
+                        wifi::RUN.signal(true);
+                    }
                 }
                 btn => screen.input(btn, &mut disp).await,
             },

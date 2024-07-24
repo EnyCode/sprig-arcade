@@ -62,6 +62,9 @@ macro_rules! draw_tga {
             .draw($disp)
             .unwrap();
     };
+    (tga, $tga:expr, $point:expr, $disp:expr) => {
+        Image::new(&$tga, $point).draw($disp).unwrap();
+    };
 }
 
 #[macro_export]
@@ -81,16 +84,12 @@ macro_rules! write_text {
         .draw($disp)
         .unwrap();
     };
-}
-
-#[macro_export]
-macro_rules! write_text_custom {
-    ($text:expr, $point:expr, $char:expr, $disp:expr) => {
+    (custom, $text:expr, $point:expr, $char:expr, $disp:expr) => {
         embedded_graphics::text::Text::new($text, $point, $char)
             .draw($disp)
             .unwrap();
     };
-    ($text:expr, $point:expr, $char:expr, $style:expr, $disp:expr) => {
+    (custom, $text:expr, $point:expr, $char:expr, $style:expr, $disp:expr) => {
         embedded_graphics::text::Text::with_text_style($text, $point, $char, $style)
             .draw($disp)
             .unwrap();
@@ -139,6 +138,7 @@ macro_rules! draw_rounded_rect {
     };
 }
 
+// TODO: replace .unwrap() with this
 #[macro_export]
 macro_rules! unwrap {
     ($e:expr, $log:expr) => {

@@ -55,10 +55,6 @@ pub const BLACK_NUMBER_CHAR: MonoTextStyle<Rgb565> =
     MonoTextStyle::new(&NUMBER_FONT, Rgb565::BLACK);
 
 pub const BLACK_CHAR: MonoTextStyle<Rgb565> = MonoTextStyle::new(&PICO_FONT, Rgb565::BLACK);
-pub const NORMAL_TEXT: TextStyle = TextStyleBuilder::new()
-    .baseline(Baseline::Alphabetic)
-    .alignment(Alignment::Left)
-    .build();
 pub const CENTERED_TEXT: TextStyle = TextStyleBuilder::new()
     .baseline(Baseline::Alphabetic)
     .alignment(Alignment::Center)
@@ -150,7 +146,6 @@ impl<'a> Screens {
 
 pub mod nav {
     use embedded_graphics::{image::Image, pixelcolor::Rgb565, Drawable};
-    use log::info;
     use tinytga::Tga;
 
     use crate::{
@@ -228,8 +223,7 @@ pub mod home {
         geometry::{Point, Size},
         image::Image,
         pixelcolor::Rgb565,
-        primitives::{Primitive, Rectangle, RoundedRectangle},
-        text::Text,
+        primitives::{Primitive, Rectangle},
         Drawable,
     };
     use embedded_graphics_framebuf::FrameBuf;
@@ -239,17 +233,19 @@ pub mod home {
     use tinytga::Tga;
 
     use super::{
-        BACKGROUND, CENTERED_TEXT, NUMBER_CHAR, PROGRESS_BG, PROGRESS_BLUE, PROGRESS_ORANGE,
-        STAT_ONE_CHAR, STAT_THREE_CHAR,
+        BACKGROUND, CENTERED_TEXT, PROGRESS_BG, PROGRESS_BLUE, PROGRESS_ORANGE, STAT_ONE_CHAR,
+        STAT_THREE_CHAR,
     };
-    use crate::gui::{days_between, BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
+    use crate::gui::{days_between, NUMBER_CHAR};
     use crate::wifi::{RequestData, RUN};
     use crate::{
-        check, format,
-        util::{ARCADE_LOGO, PROGRESS_SELECTED, STATS_SELECTED, TICKET_LARGE, TICKET_SMALL},
-        wifi, Button, Display, END_DATE, TICKETS, TICKET_GOAL, TICKET_OFFSET,
+        draw_rect, draw_rounded_rect, draw_tga, write_large_text, write_text, UPDATE_INTERVAL,
     };
-    use crate::{write_large_text, write_text, write_text_custom, UPDATE_INTERVAL};
+    use crate::{
+        format,
+        util::{ARCADE_LOGO, PROGRESS_SELECTED, STATS_SELECTED, TICKET_LARGE, TICKET_SMALL},
+        Button, Display, TICKET_GOAL, TICKET_OFFSET,
+    };
 
     static SELECTED: AtomicBool = AtomicBool::new(true);
 
@@ -263,13 +259,9 @@ pub mod home {
                 if !SELECTED.load(Ordering::Relaxed) {
                     SELECTED.store(true, Ordering::Relaxed);
 
-                    Rectangle::new(Point::new(0, 14), Size::new(146, 114))
-                        .into_styled(BACKGROUND)
-                        .draw(disp)
-                        .unwrap();
+                    draw_rect!(Point::new(0, 14), Size::new(146, 114), BACKGROUND, disp);
+                    draw_tga!(PROGRESS_SELECTED, Point::new(146, 47), disp);
 
-                    let img: Tga<Rgb565> = Tga::from_slice(PROGRESS_SELECTED).unwrap();
-                    Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
                     RUN.signal(true);
                 }
             }
@@ -277,13 +269,9 @@ pub mod home {
                 if SELECTED.load(Ordering::Relaxed) {
                     SELECTED.store(false, Ordering::Relaxed);
 
-                    Rectangle::new(Point::new(0, 14), Size::new(146, 114))
-                        .into_styled(BACKGROUND)
-                        .draw(disp)
-                        .unwrap();
+                    draw_rect!(Point::new(0, 14), Size::new(146, 114), BACKGROUND, disp);
+                    draw_tga!(STATS_SELECTED, Point::new(146, 47), disp);
 
-                    let img: Tga<Rgb565> = Tga::from_slice(STATS_SELECTED).unwrap();
-                    Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
                     RUN.signal(true);
                 }
             }
@@ -320,31 +308,26 @@ pub mod home {
         old_count: u16,
         now: DateTime,
     ) {
-        let logo: Tga<Rgb565> = Tga::from_slice(ARCADE_LOGO).unwrap();
-        Image::new(&logo, Point::new(30, 98)).draw(disp).unwrap();
-
-        let img: Tga<Rgb565> = Tga::from_slice(PROGRESS_SELECTED).unwrap();
-        Image::new(&img, Point::new(146, 47)).draw(disp).unwrap();
+        draw_tga!(ARCADE_LOGO, Point::new(30, 98), disp);
+        draw_tga!(PROGRESS_SELECTED, Point::new(146, 47), disp);
 
         let mut count = String::<4>::new();
         write!(count, "{} ", ticket_count - TICKET_OFFSET).unwrap();
         info!("{:?}", count);
+        write_text!(
+            custom,
+            &count,
+            Point::new(80, 35),
+            NUMBER_CHAR,
+            CENTERED_TEXT,
+            disp
+        );
 
-        Text::with_text_style(&count, Point::new(80, 35), NUMBER_CHAR, CENTERED_TEXT)
-            .draw(disp)
-            .unwrap();
-
-        let img = match Tga::from_slice(TICKET_LARGE) {
-            Ok(img) => img,
-            Err(err) => {
-                info!("ticket large errored with {:?}", err);
-                return;
-            }
-        };
-
-        Image::new(&img, Point::new(80 + (3 * (count.len() - 1)) as i32, 28))
-            .draw(disp)
-            .unwrap();
+        draw_tga!(
+            TICKET_LARGE,
+            Point::new(80 + (3 * (count.len() - 1)) as i32, 28),
+            disp
+        );
 
         info!("checking days left");
         Timer::after_nanos(200000).await;
@@ -388,28 +371,27 @@ pub mod home {
             } else {
                 TICKET_OFFSET
             };
-
-        RoundedRectangle::with_equal_corners(
-            Rectangle::new(Point::new(20, 62), Size::new(6, 6)),
+        draw_rounded_rect!(
+            Point::new(20, 62),
+            Size::new(6, 6),
             Size::new(2, 2),
-        )
-        .into_styled(PROGRESS_BLUE)
-        .draw(disp)
-        .unwrap();
-        RoundedRectangle::with_equal_corners(
-            Rectangle::new(Point::new(20, 71), Size::new(6, 6)),
+            PROGRESS_BLUE,
+            disp
+        );
+        draw_rounded_rect!(
+            Point::new(20, 71),
+            Size::new(6, 6),
             Size::new(2, 2),
-        )
-        .into_styled(PROGRESS_ORANGE)
-        .draw(disp)
-        .unwrap();
-        RoundedRectangle::with_equal_corners(
-            Rectangle::new(Point::new(20, 80), Size::new(6, 6)),
+            PROGRESS_ORANGE,
+            disp
+        );
+        draw_rounded_rect!(
+            Point::new(20, 80),
+            Size::new(6, 6),
             Size::new(2, 2),
-        )
-        .into_styled(PROGRESS_BG)
-        .draw(disp)
-        .unwrap();
+            PROGRESS_BG,
+            disp
+        );
 
         let per = (ticket_count - TICKET_OFFSET) as f32 / TICKET_GOAL as f32;
         info!("Found per");
@@ -461,32 +443,23 @@ pub mod home {
         info!("got left");
         Timer::after_nanos(200000).await;
 
-        Text::new(&complete, Point::new(28, 62), BLACK_CHAR)
-            .draw(disp)
-            .unwrap();
+        write_text!(&complete, Point::new(28, 62), disp);
+        write_text!(&ideal, Point::new(28, 71), disp);
+        write_text!(&left, Point::new(28, 80), disp);
 
-        Text::new(&ideal, Point::new(28, 71), BLACK_CHAR)
-            .draw(disp)
-            .unwrap();
-
-        Text::new(&left, Point::new(28, 80), BLACK_CHAR)
-            .draw(disp)
-            .unwrap();
-
-        let img = match Tga::from_slice(TICKET_SMALL) {
-            Ok(img) => img,
-            Err(err) => {
-                info!("ticket small errored with {:?}", err);
-                return;
-            }
-        };
-
-        Image::new(&img, Point::new(28 + ((ideal.len() - 9) * 4) as i32, 70))
-            .draw(disp)
-            .unwrap();
-        Image::new(&img, Point::new(28 + ((left.len() - 4) * 4) as i32, 79))
-            .draw(disp)
-            .unwrap();
+        let img = Tga::from_slice(TICKET_SMALL).unwrap();
+        draw_tga!(
+            tga,
+            img,
+            Point::new(28 + ((ideal.len() - 9) * 4) as i32, 70),
+            disp
+        );
+        draw_tga!(
+            tga,
+            img,
+            Point::new(28 + ((left.len() - 4) * 4) as i32, 79),
+            disp
+        );
 
         info!(
             "old {:?}, ticket count {:?}, ticket offset {:?}, ticket goal {:?}",
@@ -499,13 +472,13 @@ pub mod home {
         let mut data = [Rgb565::new(31, 60, 27); 120 * 6];
         let mut fbuf = FrameBuf::new(&mut data, 120, 6);
 
-        RoundedRectangle::with_equal_corners(
-            Rectangle::new(Point::new(0, 0), Size::new(120, 6)),
+        draw_rounded_rect!(
+            Point::new(0, 0),
+            Size::new(120, 6),
             Size::new(2, 2),
-        )
-        .into_styled(PROGRESS_BG)
-        .draw(&mut fbuf)
-        .unwrap();
+            PROGRESS_BG,
+            &mut fbuf
+        );
 
         info!("prev {:?}, change {:?}", prev, change);
 
@@ -514,51 +487,39 @@ pub mod home {
 
             if !DRAWN.load(core::sync::atomic::Ordering::Relaxed) && ideal_percent >= change + prev
             {
-                RoundedRectangle::with_equal_corners(
-                    Rectangle::new(
-                        Point::new(0, 0),
-                        Size::new((120. * (ideal_percent * mul)) as u32, 6),
-                    ),
+                draw_rounded_rect!(
+                    Point::new(0, 0),
+                    Size::new((120. * (ideal_percent * mul)) as u32, 6),
                     Size::new(2, 2),
-                )
-                .into_styled(PROGRESS_ORANGE)
-                .draw(&mut fbuf)
-                .unwrap();
+                    PROGRESS_ORANGE,
+                    &mut fbuf
+                );
             }
 
-            RoundedRectangle::with_equal_corners(
-                Rectangle::new(
-                    Point::new(0, 0),
-                    Size::new((120. * ((change * mul) + prev)) as u32, 6),
-                ),
+            draw_rounded_rect!(
+                Point::new(0, 0),
+                Size::new((120. * ((change * mul) + prev)) as u32, 6),
                 Size::new(2, 2),
-            )
-            .into_styled(PROGRESS_BLUE)
-            .draw(&mut fbuf)
-            .unwrap();
+                PROGRESS_BLUE,
+                &mut fbuf
+            );
 
             if !DRAWN.load(core::sync::atomic::Ordering::Relaxed) && ideal_percent < change + prev {
-                RoundedRectangle::with_equal_corners(
-                    Rectangle::new(
-                        Point::new(0, 0),
-                        Size::new((120. * (ideal_percent * mul)) as u32, 6),
-                    ),
+                draw_rounded_rect!(
+                    Point::new(0, 0),
+                    Size::new((120. * (ideal_percent * mul)) as u32, 6),
                     Size::new(2, 2),
-                )
-                .into_styled(PROGRESS_ORANGE)
-                .draw(&mut fbuf)
-                .unwrap();
+                    PROGRESS_ORANGE,
+                    &mut fbuf
+                );
             } else if ideal_percent < change + prev {
-                RoundedRectangle::with_equal_corners(
-                    Rectangle::new(
-                        Point::new(0, 0),
-                        Size::new((120. * ideal_percent) as u32, 6),
-                    ),
+                draw_rounded_rect!(
+                    Point::new(0, 0),
+                    Size::new((120. * ideal_percent) as u32, 6),
                     Size::new(2, 2),
-                )
-                .into_styled(PROGRESS_ORANGE)
-                .draw(&mut fbuf)
-                .unwrap();
+                    PROGRESS_ORANGE,
+                    &mut fbuf
+                );
             }
 
             let area = Rectangle::new(Point::new(20, 53), fbuf.size());
@@ -606,7 +567,7 @@ pub mod home {
         let hrs = round_format!(
             (ticket_count - TICKET_OFFSET) as f32 / (days_between(&now, &start) as f32 + 1.)
         );
-        write_text_custom!(&hrs, Point::new(23, 29), STAT_ONE_CHAR, disp);
+        write_text!(custom, &hrs, Point::new(23, 29), STAT_ONE_CHAR, disp);
         write_text!(
             "hrs/day on average.",
             Point::new(26 + (hrs.len() * 8) as i32, 31),
@@ -614,7 +575,7 @@ pub mod home {
         );
 
         let ideal = round_format!(TICKET_GOAL as f32 / days_between(&end, &start) as f32);
-        write_large_text!(&ideal, Point::new(23, 45), disp);
+        write_text!(custom, &ideal, Point::new(23, 45), NUMBER_CHAR, disp);
         write_text!(
             "ideal daily tickets.",
             Point::new(26 + (ideal.len() * 8) as i32, 47),
@@ -622,7 +583,13 @@ pub mod home {
         );
 
         let days_left = format!(2, "{}", days_between(&end, &now) - 1);
-        write_text_custom!(&days_left, Point::new(23, 61), STAT_THREE_CHAR, disp);
+        write_text!(
+            custom,
+            &days_left,
+            Point::new(23, 61),
+            STAT_THREE_CHAR,
+            disp
+        );
         write_text!(
             "days left.",
             Point::new(26 + (days_left.len() * 8) as i32, 63),
@@ -633,7 +600,7 @@ pub mod home {
             (TICKET_GOAL - ticket_count + TICKET_OFFSET) as f32 / days_between(&end, &now) as f32
         );
 
-        write_text_custom!(&on_track, Point::new(23, 77), STAT_ONE_CHAR, disp);
+        write_text!(custom, &on_track, Point::new(23, 77), STAT_ONE_CHAR, disp);
         write_text!(
             "hrs/day to get on track.",
             Point::new(26 + (on_track.len() * 8) as i32, 79),
@@ -664,13 +631,14 @@ pub mod session {
         gui::{BLACK_FILL, CENTERED_TEXT},
         util::{Events, PROGRESS_BAR},
         wifi::RequestData,
-        write_large_text, write_text, Display, EVENTS, UPDATE_INTERVAL,
+        write_large_text, write_text, Display, EVENTS, TICKETS, TICKET_OFFSET, UPDATE_INTERVAL,
     };
 
     use super::BACKGROUND;
 
     pub static ON_SCREEN: Signal<ThreadModeRawMutex, bool> = Signal::new();
     pub static FLASH: AtomicBool = AtomicBool::new(true);
+    pub static TRIGGERED: AtomicBool = AtomicBool::new(true);
 
     pub async fn init(spawner: &Spawner) {
         UPDATE_INTERVAL.store(1, core::sync::atomic::Ordering::Relaxed);
@@ -717,13 +685,27 @@ pub mod session {
 
         if elapsed == 60 {
             FLASH.store(false, core::sync::atomic::Ordering::Relaxed);
+            if TRIGGERED.load(core::sync::atomic::Ordering::Relaxed) {
+                TICKETS.store(
+                    TICKETS.load(core::sync::atomic::Ordering::Relaxed) + 1,
+                    core::sync::atomic::Ordering::Relaxed,
+                );
+                TRIGGERED.store(false, core::sync::atomic::Ordering::Relaxed);
+            }
+        } else {
+            TRIGGERED.store(true, core::sync::atomic::Ordering::Relaxed);
         }
 
         draw_rect!(Point::new(64, 40), Size::new(32, 10), BACKGROUND, disp);
         write_large_text!(&display, Point::new(80, 40), CENTERED_TEXT, disp);
 
         write_text!("Ticket No. ", Point::new(2, 118), disp);
-        write_large_text!("143", Point::new(46, 114), disp);
+        let tickets = format!(
+            3,
+            "{}",
+            1 + TICKETS.load(core::sync::atomic::Ordering::Relaxed) - TICKET_OFFSET
+        );
+        write_large_text!(&tickets, Point::new(46, 114), disp);
 
         if paused {
             draw_rect!(Point::new(102, 118), Size::new(56, 8), BACKGROUND, disp);
