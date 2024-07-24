@@ -1,3 +1,4 @@
+use embassy_executor::Spawner;
 use embassy_rp::rtc::DateTime;
 use embedded_graphics::{
     geometry::Size,
@@ -79,6 +80,10 @@ pub const BACKGROUND: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
     .fill_color(Rgb565::new(31, 59, 26))
     .build();
 
+pub const BLACK_FILL: PrimitiveStyle<Rgb565> = PrimitiveStyleBuilder::new()
+    .fill_color(Rgb565::BLACK)
+    .build();
+
 fn days_since_epoch(datetime: &DateTime) -> i32 {
     let is_leap_year =
         datetime.year % 4 == 0 && (datetime.year % 100 != 0 || datetime.year % 400 == 0);
@@ -108,13 +113,16 @@ pub enum Screens {
 }
 
 impl<'a> Screens {
-    pub async fn init(&self) {
+    pub async fn init(&self, spawner: &Spawner) {
+        session::ON_SCREEN.reset();
         match self {
             Screens::Home => {
                 *(REQUEST_TYPE.lock().await) = RequestType::Stats;
+                home::init().await;
             }
             Screens::Session => {
                 *(REQUEST_TYPE.lock().await) = RequestType::Session;
+                session::init(spawner).await;
             }
         }
     }
@@ -236,6 +244,7 @@ pub mod home {
     };
     use crate::gui::{days_between, BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
     use crate::wifi::{RequestData, RUN};
+    use crate::UPDATE_INTERVAL;
     use crate::{
         check, format,
         util::{ARCADE_LOGO, PROGRESS_SELECTED, STATS_SELECTED, TICKET_LARGE, TICKET_SMALL},
@@ -243,6 +252,10 @@ pub mod home {
     };
 
     static SELECTED: AtomicBool = AtomicBool::new(true);
+
+    pub async fn init() {
+        UPDATE_INTERVAL.store(5, core::sync::atomic::Ordering::Relaxed);
+    }
 
     pub async fn input(btn: Button, disp: &mut Display<'_>) {
         match btn {
@@ -653,30 +666,98 @@ pub mod home {
 }
 
 pub mod session {
+    use core::str::FromStr;
+
+    use embassy_executor::Spawner;
     use embassy_rp::rtc::DateTime;
-    use embedded_graphics::{geometry::Point, image::Image, text::Text, Drawable};
-    use log::info;
+    use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, signal::Signal};
+    use embassy_time::Timer;
+    use embedded_graphics::{
+        geometry::Point,
+        image::Image,
+        prelude::{Primitive, Size},
+        primitives::{Rectangle, RoundedRectangle},
+        text::Text,
+        Drawable,
+    };
+    use heapless::String;
+    use log::{error, info};
     use tinytga::Tga;
 
     use crate::{
-        gui::{BLACK_NUMBER_CHAR, CENTERED_TEXT},
-        util::PROGRESS_BAR,
+        format,
+        gui::{BLACK_FILL, BLACK_NUMBER_CHAR, CENTERED_TEXT},
+        util::{Events, PROGRESS_BAR},
         wifi::RequestData,
-        Display,
+        Display, EVENTS, UPDATE_INTERVAL,
     };
+
+    pub static ON_SCREEN: Signal<ThreadModeRawMutex, bool> = Signal::new();
+
+    pub async fn init(spawner: &Spawner) {
+        UPDATE_INTERVAL.store(1, core::sync::atomic::Ordering::Relaxed);
+        ON_SCREEN.signal(true);
+        spawner.spawn(flash_task())
+    }
+
+    #[embassy_executor::task]
+    pub async fn flash_task(default: String<4>, flash: String<4>) {
+        let mut flashing = false;
+        while ON_SCREEN.signaled() {
+            EVENTS
+                .send(Events::FlashSessionScreen(match flashing {
+                    true => flash.clone(),
+                    false => default.clone(),
+                }))
+                .await;
+            flashing = !flashing;
+            Timer::after_millis(500).await;
+        }
+    }
+
+    pub async fn flash(text: String<4>, disp: &mut Display<'_>) {
+        Text::with_text_style(&text, Point::new(80, 40), BLACK_NUMBER_CHAR, CENTERED_TEXT)
+            .draw(disp)
+            .unwrap();
+    }
 
     pub async fn update(disp: &mut Display<'_>, data: RequestData, now: DateTime) {
         info!("got data from session {:?}", data);
+
+        let (elapsed, goal, paused) = match data {
+            RequestData::Session(elapsed, goal, paused) => (elapsed, goal, paused),
+            _ => {
+                error!("[GUI] [Session] Recieved incorrect data!");
+                return;
+            }
+        };
+
         Image::new(&Tga::from_slice(PROGRESS_BAR).unwrap(), Point::new(20, 53))
             .draw(disp)
             .unwrap();
 
-        Text::with_text_style(
-            "0:27  ",
-            Point::new(80, 40),
-            BLACK_NUMBER_CHAR,
-            CENTERED_TEXT,
+        let t = match elapsed {
+            0 => String::<4>::from_str("1:00").unwrap(),
+            _ => format!(4, "0:{:?}", 60 - elapsed),
+        };
+
+        let flash = match elapsed {
+            0 => String::<4>::from_str("1 00").unwrap(),
+            _ => format!(4, "0 {:?}", 60 - elapsed),
+        };
+
+        Text::with_text_style(&t, Point::new(80, 40), BLACK_NUMBER_CHAR, CENTERED_TEXT)
+            .draw(disp)
+            .unwrap();
+
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(
+                Point::new(20, 53),
+                Size::new((120. * (elapsed / 60) as f32) as u32, 6),
+            ),
+            Size::new(2, 2),
         )
+        .into_styled(BLACK_FILL)
         .draw(disp)
         .unwrap();
     }

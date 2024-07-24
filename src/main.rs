@@ -30,8 +30,9 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::primitives::{Primitive, Rectangle};
 use embedded_graphics::Drawable;
 use gui::nav::{update_active, update_selected};
-use gui::{Screens, BACKGROUND};
+use gui::{session, Screens, BACKGROUND};
 use log::info;
+use portable_atomic::AtomicU8;
 use st7735_lcd::{Orientation, ST7735};
 use tinytga::Tga;
 use util::{
@@ -70,6 +71,8 @@ type Display<'a> = ST7735<
 
 // TODO: double check length
 static EVENTS: Channel<ThreadModeRawMutex, Events, 8> = Channel::new();
+
+pub static UPDATE_INTERVAL: AtomicU8 = AtomicU8::new(5);
 
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
@@ -343,7 +346,6 @@ async fn main(spawner: Spawner) -> ! {
         .unwrap();
 
     let buttons: Tga<Rgb565> = Tga::from_slice(BUTTONS).unwrap();
-    let btn: Tga<Rgb565> = Tga::from_slice(BTN).unwrap();
     let selected_btn: Tga<Rgb565> = Tga::from_slice(SELECTED_BTN).unwrap();
 
     Image::new(&buttons, Point::new(23, 0))
@@ -351,7 +353,7 @@ async fn main(spawner: Spawner) -> ! {
         .unwrap();
 
     let mut active = NavButton::Home;
-    let mut selected = NavButton::Session;
+    let mut selected = NavButton::Home;
 
     Image::new(&selected_btn, selected.pos())
         .draw(&mut disp)
@@ -360,6 +362,8 @@ async fn main(spawner: Spawner) -> ! {
     Image::new(&selected.icon(), selected.icon_pos())
         .draw(&mut disp)
         .unwrap();
+
+    update_active(&selected, &active, &mut disp);
 
     info!("Done!");
     Timer::after_nanos(20000).await;
@@ -392,7 +396,7 @@ async fn main(spawner: Spawner) -> ! {
                         NavButton::Session => Screens::Session,
                         _ => Screens::Home,
                     };
-                    screen.init().await;
+                    screen.init(&spawner).await;
                     wifi::RUN.signal(true);
                 }
                 btn => screen.input(btn, &mut disp).await,
@@ -454,6 +458,9 @@ async fn main(spawner: Spawner) -> ! {
                 };
 
                 rtc.set_datetime(now).unwrap();
+            }
+            Events::FlashSessionScreen(text) => {
+                session::flash(text, &mut disp).await;
             }
             _ => {}
         }

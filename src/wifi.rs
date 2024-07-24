@@ -50,7 +50,7 @@ use static_cell::StaticCell;
 
 use crate::{
     gui::{BLACK_CHAR, CENTERED_TEXT},
-    Irqs, EVENTS, TICKETS,
+    Irqs, EVENTS, TICKETS, UPDATE_INTERVAL,
 };
 
 pub static RUN: Signal<ThreadModeRawMutex, bool> = Signal::new();
@@ -306,7 +306,8 @@ pub async fn setup(
 #[embassy_executor::task]
 pub async fn wifi_trigger() {
     loop {
-        Timer::after_secs(5 * 60).await;
+        Timer::after_secs(UPDATE_INTERVAL.load(core::sync::atomic::Ordering::Relaxed) as u64 * 60)
+            .await;
         RUN.signal(true);
     }
 }
@@ -461,14 +462,21 @@ pub async fn configure_rtc(stack: &'static Stack<cyw43::NetDriver<'static>>) {
         let tcp_client = TcpClient::new(stack, &client_state);
         let dns_client = DnsSocket::new(stack);
 
-        let mut http_client = HttpClient::new(&tcp_client, &dns_client);
+        let tls_read = &mut [0u8; 16384];
+        let tls_write = &mut [0u8; 16384];
+
+        let mut http_client = HttpClient::new_with_tls(
+            &tcp_client,
+            &dns_client,
+            TlsConfig::new(312, tls_read, tls_write, TlsVerify::None),
+        );
         static mut RX_BUF: StaticCell<[u8; 8192]> = StaticCell::new();
         let rx_buffer = RX_BUF.init([0; 8192]);
 
         let mut req = match http_client
             .request(
                 reqwless::request::Method::GET,
-                "http://worldtimeapi.org/api/timezone/US/Eastern",
+                "https://time.eny.hackclub.app/et",
             )
             .await
         {
