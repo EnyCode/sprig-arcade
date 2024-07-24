@@ -55,6 +55,103 @@ macro_rules! check {
     }};
 }
 
+#[macro_export]
+macro_rules! draw_tga {
+    ($constant:expr, $point:expr, $disp:expr) => {
+        Image::new(&Tga::from_slice($constant).unwrap(), $point)
+            .draw($disp)
+            .unwrap();
+    };
+}
+
+#[macro_export]
+macro_rules! write_text {
+    ($text:expr, $point:expr, $disp:expr) => {
+        embedded_graphics::text::Text::new($text, $point, crate::gui::BLACK_CHAR)
+            .draw($disp)
+            .unwrap();
+    };
+    ($text:expr, $point:expr, $style:expr, $disp:expr) => {
+        embedded_graphics::text::Text::with_text_style(
+            $text,
+            $point,
+            crate::gui::BLACK_CHAR,
+            $style,
+        )
+        .draw($disp)
+        .unwrap();
+    };
+}
+
+#[macro_export]
+macro_rules! write_text_custom {
+    ($text:expr, $point:expr, $char:expr, $disp:expr) => {
+        embedded_graphics::text::Text::new($text, $point, $char)
+            .draw($disp)
+            .unwrap();
+    };
+    ($text:expr, $point:expr, $char:expr, $style:expr, $disp:expr) => {
+        embedded_graphics::text::Text::with_text_style($text, $point, $char, $style)
+            .draw($disp)
+            .unwrap();
+    };
+}
+
+#[macro_export]
+macro_rules! write_large_text {
+    ($text:expr, $point:expr, $disp:expr) => {
+        embedded_graphics::text::Text::new($text, $point, crate::gui::BLACK_NUMBER_CHAR)
+            .draw($disp)
+            .unwrap();
+    };
+    ($text:expr, $point:expr, $style:expr, $disp:expr) => {
+        embedded_graphics::text::Text::with_text_style(
+            $text,
+            $point,
+            crate::gui::BLACK_NUMBER_CHAR,
+            $style,
+        )
+        .draw($disp)
+        .unwrap();
+    };
+}
+
+#[macro_export]
+macro_rules! draw_rect {
+    ($point:expr, $size:expr, $style:expr, $disp:expr) => {
+        embedded_graphics::primitives::Rectangle::new($point, $size)
+            .into_styled($style)
+            .draw($disp)
+            .unwrap();
+    };
+}
+
+#[macro_export]
+macro_rules! draw_rounded_rect {
+    ($point:expr, $size:expr, $radii:expr, $style:expr, $disp:expr) => {
+        embedded_graphics::primitives::RoundedRectangle::with_equal_corners(
+            embedded_graphics::primitives::Rectangle::new($point, $size),
+            $radii,
+        )
+        .into_styled($style)
+        .draw($disp)
+        .unwrap();
+    };
+}
+
+#[macro_export]
+macro_rules! unwrap {
+    ($e:expr, $log:expr) => {
+        match $e {
+            Ok(val) => val,
+            Err(err) => {
+                log::error!("{:?} {:?}", log, err);
+                return;
+            }
+        }
+    };
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Button {
     Up,

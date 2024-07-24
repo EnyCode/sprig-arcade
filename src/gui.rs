@@ -244,12 +244,12 @@ pub mod home {
     };
     use crate::gui::{days_between, BLACK_CHAR, NORMAL_TEXT, PICO_FONT};
     use crate::wifi::{RequestData, RUN};
-    use crate::UPDATE_INTERVAL;
     use crate::{
         check, format,
         util::{ARCADE_LOGO, PROGRESS_SELECTED, STATS_SELECTED, TICKET_LARGE, TICKET_SMALL},
         wifi, Button, Display, END_DATE, TICKETS, TICKET_GOAL, TICKET_OFFSET,
     };
+    use crate::{write_large_text, write_text, write_text_custom, UPDATE_INTERVAL};
 
     static SELECTED: AtomicBool = AtomicBool::new(true);
 
@@ -348,14 +348,7 @@ pub mod home {
 
         info!("checking days left");
         Timer::after_nanos(200000).await;
-        /*let end = FixedOffset::east_opt(14400)
-            .unwrap()
-            .timestamp_opt(1725163199, 0)
-            .unwrap();
-        let start = FixedOffset::east_opt(14400)
-            .unwrap()
-            .timestamp_opt(1718668800, 0)
-            .unwrap();*/
+
         let end = DateTime {
             year: 2024,
             month: 9,
@@ -495,10 +488,12 @@ pub mod home {
             .draw(disp)
             .unwrap();
 
-        // 1 second long animation
-        // TODO: expected progress
+        info!(
+            "old {:?}, ticket count {:?}, ticket offset {:?}, ticket goal {:?}",
+            old, ticket_count, TICKET_OFFSET, TICKET_GOAL
+        );
         let prev = old as f32 / TICKET_GOAL as f32;
-        let change = (ticket_count - old) as f32 / TICKET_GOAL as f32;
+        let change = (ticket_count - TICKET_OFFSET - old) as f32 / TICKET_GOAL as f32;
 
         static DRAWN: AtomicBool = AtomicBool::new(false);
         let mut data = [Rgb565::new(31, 60, 27); 120 * 6];
@@ -511,6 +506,8 @@ pub mod home {
         .into_styled(PROGRESS_BG)
         .draw(&mut fbuf)
         .unwrap();
+
+        info!("prev {:?}, change {:?}", prev, change);
 
         for i in 0..30 {
             let mul = -((PI * (i as f32 / 30.)).cos() - 1.) / 2.;
@@ -609,59 +606,39 @@ pub mod home {
         let hrs = round_format!(
             (ticket_count - TICKET_OFFSET) as f32 / (days_between(&now, &start) as f32 + 1.)
         );
-
-        Text::new(&hrs, Point::new(23, 29), STAT_ONE_CHAR)
-            .draw(disp)
-            .unwrap();
-        Text::new(
+        write_text_custom!(&hrs, Point::new(23, 29), STAT_ONE_CHAR, disp);
+        write_text!(
             "hrs/day on average.",
             Point::new(26 + (hrs.len() * 8) as i32, 31),
-            BLACK_CHAR,
-        )
-        .draw(disp)
-        .unwrap();
+            disp
+        );
 
         let ideal = round_format!(TICKET_GOAL as f32 / days_between(&end, &start) as f32);
-
-        Text::new(&ideal, Point::new(23, 45), NUMBER_CHAR)
-            .draw(disp)
-            .unwrap();
-
-        Text::new(
+        write_large_text!(&ideal, Point::new(23, 45), disp);
+        write_text!(
             "ideal daily tickets.",
             Point::new(26 + (ideal.len() * 8) as i32, 47),
-            BLACK_CHAR,
-        )
-        .draw(disp)
-        .unwrap();
+            disp
+        );
 
         let days_left = format!(2, "{}", days_between(&end, &now) - 1);
-
-        Text::new(&days_left, Point::new(23, 61), STAT_THREE_CHAR)
-            .draw(disp)
-            .unwrap();
-        Text::new(
+        write_text_custom!(&days_left, Point::new(23, 61), STAT_THREE_CHAR, disp);
+        write_text!(
             "days left.",
             Point::new(26 + (days_left.len() * 8) as i32, 63),
-            BLACK_CHAR,
-        )
-        .draw(disp)
-        .unwrap();
+            disp
+        );
 
         let on_track = round_format!(
             (TICKET_GOAL - ticket_count + TICKET_OFFSET) as f32 / days_between(&end, &now) as f32
         );
 
-        Text::new(&on_track, Point::new(23, 77), STAT_ONE_CHAR)
-            .draw(disp)
-            .unwrap();
-        Text::new(
+        write_text_custom!(&on_track, Point::new(23, 77), STAT_ONE_CHAR, disp);
+        write_text!(
             "hrs/day to get on track.",
             Point::new(26 + (on_track.len() * 8) as i32, 79),
-            BLACK_CHAR,
-        )
-        .draw(disp)
-        .unwrap();
+            disp
+        );
     }
 }
 
@@ -669,27 +646,25 @@ pub mod session {
     use core::{str::FromStr, sync::atomic::AtomicBool};
 
     use embassy_executor::Spawner;
-    use embassy_rp::{peripherals::FLASH, rtc::DateTime};
-    use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex, signal::Signal};
+    use embassy_rp::rtc::DateTime;
+    use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, signal::Signal};
     use embassy_time::Timer;
     use embedded_graphics::{
         geometry::Point,
         image::Image,
         prelude::{Primitive, Size},
-        primitives::{Rectangle, RoundedRectangle},
-        text::Text,
         Drawable,
     };
     use heapless::String;
-    use log::{error, info};
+    use log::error;
     use tinytga::Tga;
 
     use crate::{
-        format,
-        gui::{BLACK_CHAR, BLACK_FILL, BLACK_NUMBER_CHAR, CENTERED_TEXT},
+        draw_rect, draw_rounded_rect, draw_tga, format,
+        gui::{BLACK_FILL, CENTERED_TEXT},
         util::{Events, PROGRESS_BAR},
         wifi::RequestData,
-        Display, EVENTS, UPDATE_INTERVAL,
+        write_large_text, write_text, Display, EVENTS, UPDATE_INTERVAL,
     };
 
     use super::BACKGROUND;
@@ -716,21 +691,14 @@ pub mod session {
     pub async fn flash(flash: bool, disp: &mut Display<'_>) {
         if FLASH.load(core::sync::atomic::Ordering::Relaxed) {
             if flash {
-                Rectangle::new(Point::new(73, 40), Size::new(8, 10))
-                    .into_styled(BACKGROUND)
-                    .draw(disp)
-                    .unwrap();
+                draw_rect!(Point::new(73, 40), Size::new(8, 10), BACKGROUND, disp);
             } else {
-                Text::new(":", Point::new(73, 40), BLACK_NUMBER_CHAR)
-                    .draw(disp)
-                    .unwrap();
+                write_large_text!(":", Point::new(73, 40), disp);
             }
         }
     }
 
     pub async fn update(disp: &mut Display<'_>, data: RequestData, now: DateTime) {
-        info!("got data from session {:?}", data);
-
         let (elapsed, goal, paused) = match data {
             RequestData::Session(elapsed, goal, paused) => (elapsed, goal, paused),
             _ => {
@@ -739,77 +707,40 @@ pub mod session {
             }
         };
 
-        Image::new(&Tga::from_slice(PROGRESS_BAR).unwrap(), Point::new(20, 53))
-            .draw(disp)
-            .unwrap();
+        draw_tga!(PROGRESS_BAR, Point::new(20, 53), disp);
 
         let display = match elapsed {
             0 => String::<4>::from_str("1:00").unwrap(),
             60 => String::<4>::from_str("DONE").unwrap(),
             _ => format!(4, "0:{:02}", 60 - elapsed),
         };
+
         if elapsed == 60 {
             FLASH.store(false, core::sync::atomic::Ordering::Relaxed);
         }
 
-        Rectangle::new(Point::new(64, 40), Size::new(32, 10))
-            .into_styled(BACKGROUND)
-            .draw(disp)
-            .unwrap();
+        draw_rect!(Point::new(64, 40), Size::new(32, 10), BACKGROUND, disp);
+        write_large_text!(&display, Point::new(80, 40), CENTERED_TEXT, disp);
 
-        Text::with_text_style(
-            &display,
-            Point::new(80, 40),
-            BLACK_NUMBER_CHAR,
-            CENTERED_TEXT,
-        )
-        .draw(disp)
-        .unwrap();
-
-        /*Rectangle::new(Point::new(64, 40), Size::new(32, 8))
-        .into_styled(BACKGROUND)
-        .draw(disp)
-        .unwrap();*/
-
-        Text::new("Ticket No. ", Point::new(2, 118), BLACK_CHAR)
-            .draw(disp)
-            .unwrap();
-
-        Text::new("143", Point::new(46, 114), BLACK_NUMBER_CHAR)
-            .draw(disp)
-            .unwrap();
+        write_text!("Ticket No. ", Point::new(2, 118), disp);
+        write_large_text!("143", Point::new(46, 114), disp);
 
         if paused {
-            Rectangle::new(Point::new(102, 118), Size::new(56, 8))
-                .into_styled(BLACK_FILL)
-                .draw(disp)
-                .unwrap();
-            Text::new("Paused", Point::new(134, 118), BLACK_CHAR)
-                .draw(disp)
-                .unwrap();
+            draw_rect!(Point::new(102, 118), Size::new(56, 8), BACKGROUND, disp);
+            write_text!("Paused", Point::new(134, 118), disp);
         } else {
-            Rectangle::new(Point::new(134, 118), Size::new(32, 8))
-                .into_styled(BACKGROUND)
-                .draw(disp)
-                .unwrap();
-            Text::new("Ongoing", Point::new(130, 118), BLACK_CHAR)
-                .draw(disp)
-                .unwrap();
+            draw_rect!(Point::new(134, 118), Size::new(32, 8), BACKGROUND, disp);
+            write_text!("Ongoing", Point::new(130, 118), disp);
         }
 
-        RoundedRectangle::with_equal_corners(
-            Rectangle::new(
-                Point::new(20, 53),
-                Size::new((120. * (elapsed as f32 / 60.)) as u32, 6),
-            ),
+        draw_rounded_rect!(
+            Point::new(20, 53),
+            Size::new((120. * (elapsed as f32 / 60.)) as u32, 6),
             Size::new(2, 2),
-        )
-        .into_styled(BLACK_FILL)
-        .draw(disp)
-        .unwrap();
+            BLACK_FILL,
+            disp
+        );
 
-        Text::with_text_style(goal, Point::new(80, 62), BLACK_CHAR, CENTERED_TEXT)
-            .draw(disp)
-            .unwrap();
+        write_text!(goal, Point::new(80, 62), CENTERED_TEXT, disp);
     }
 }
